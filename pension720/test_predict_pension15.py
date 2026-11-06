@@ -101,6 +101,38 @@ class WeeklyTest(unittest.TestCase):
         self.assertIsNone(weekly.unseal('2:y', sealed))
 
 
+class LearnTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            from . import learn
+        except ImportError:
+            import learn
+        self.learn = learn
+
+    def test_challengers_differ_from_champion(self):
+        champion = self.learn.DEFAULT
+        out = self.learn.challengers(champion, 341)
+        self.assertEqual(len(out), 23)
+        self.assertNotIn(champion, out)
+        self.assertEqual(len(set(out)), len(out))
+        self.assertEqual(out, self.learn.challengers(champion, 341))   # 같은 회차면 같은 도전자
+
+    def test_switch_only_on_clear_gain(self):
+        methods = [self.learn.DEFAULT] + self.learn.challengers(self.learn.DEFAULT, 1)[:2]
+        rng = np.random.default_rng(0)
+        base = rng.uniform(1, 200_001, 60)
+        noisy = base + rng.normal(0, 30_000, 60)       # 비슷한 성적, 잡음만
+        clearly = base - 20_000 + rng.normal(0, 1_000, 60)
+        chosen, _ = self.learn.decide(methods, np.stack([base, noisy, clearly]))
+        self.assertIs(chosen, methods[2])
+        chosen, _ = self.learn.decide(methods[:2], np.stack([base, noisy]))
+        self.assertIs(chosen, methods[0])
+
+    def test_method_text_round_trip(self):
+        m = self.learn.challengers(self.learn.DEFAULT, 5)[-1]
+        self.assertEqual(eng.Setting.from_text(m.to_text()), m)
+
+
 class SelectTest(unittest.TestCase):
     def test_constraints_on_random_scores(self):
         scores = np.random.default_rng(7).normal(size=eng.N_CANDIDATES)

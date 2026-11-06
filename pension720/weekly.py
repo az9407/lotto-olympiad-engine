@@ -30,11 +30,14 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import predict_pension15 as eng  # noqa: E402
+import learn  # noqa: E402
 
 DATA = eng.DATA_CSV
 XLSX = HERE / 'data' / '연금복권720_역대당첨번호.xlsx'
 RESULTS = HERE / 'results'
 CHAT_FILE = HERE / 'data' / 'telegram_chat.enc'
+SCOREBOARD = RESULTS / '실전성적.csv'
+SCOREBOARD_COLUMNS = ('회차', '방법', '1등 순위', '500만 중 상위 %', '후보 10개 최고 등수')
 SEND_COUNT = 10
 RESULTS_URL = ('https://github.com/az9407/lotto-olympiad-engine/tree/'
                'feature/lotto-and-pension-engines/pension720/results')
@@ -141,14 +144,16 @@ def prizes(group, number, draw_group, draw_number, bonus):
     return out
 
 
-def read_setting(folder):
+def read_method(folder):
+    """그 회차 후보를 만들 때 쓴 방법. 방법.txt가 없으면 결과.md의 설정 이름으로 찾는다."""
+    if (folder / '방법.txt').exists():
+        return eng.Setting.from_text((folder / '방법.txt').read_text(encoding='utf-8'))
     report = folder / '결과.md'
-    if not report.exists():
-        return None
-    labels = {s.label(): s for s in eng.SETTINGS}
-    for line in report.read_text(encoding='utf-8').splitlines():
-        if line.startswith('선택 설정: '):
-            return labels.get(line.removeprefix('선택 설정: ').strip())
+    if report.exists():
+        labels = {m.label(): m for m in eng.SETTINGS}
+        for line in report.read_text(encoding='utf-8').splitlines():
+            if line.startswith('선택 설정: '):
+                return labels.get(line.removeprefix('선택 설정: ').strip())
     return None
 
 
@@ -160,15 +165,12 @@ def read_candidates(folder, count=SEND_COUNT):
         return [(int(r['순위']), int(r['조']), r['6자리'], r['종합점수 S']) for r in csv.DictReader(f)][:count]
 
 
-def analyze(draws, setting, previous):
+def analyze(draws, setting, previous, prepared):
     """마지막 회차를, 그 회차 직전 자료로 학습한 모델(지난주 모델)로 본다."""
     i = len(draws.rounds) - 1
     context = eng.Context(draws, i)
-    space = eng.Space()
-    models = []
-    for stream in (eng.MAIN, eng.BONUS):
-        catalog = eng.build_catalog(draws, stream)
-        models.append(eng.RuleFold(catalog, eng.HistoryIndex(catalog), context, space).fit(setting))
+    catalogs, histories, space = prepared
+    models = [eng.RuleFold(cat, hist, context, space).fit(setting) for cat, hist in zip(catalogs, histories)]
     scores, parts = eng.score_all(draws, setting, models, index=i)
     group = int(draws.groups[i])
     main = ''.join(map(str, draws.main[i]))
@@ -235,13 +237,35 @@ def write_analysis(folder, a):
     (folder / '분석.md').write_text(text, encoding='utf-8')
 
 
-def compose(a, target, target_date, setting, candidates):
+def record(a, method):
+    """지난주 방법이 실제 1등을 몇 위에 놓았는지 실전 성적표에 한 줄 남긴다. (누적 회수, 평균 상위 %)"""
+    rows = []
+    if SCOREBOARD.exists():
+        with SCOREBOARD.open(encoding='utf-8-sig', newline='') as f:
+            rows = [r for r in csv.DictReader(f) if int(r['회차']) != a['round']]
+    best = next((p for tier in ('1등', '2등', '보너스', '3등', '4등', '5등', '6등', '7등')
+                 for _, _, _, prize in a['previous'] for p in prize if p == tier), '낙첨')
+    rows.append({'회차': a['round'], '방법': method.label(), '1등 순위': a['rank'],
+                 '500만 중 상위 %': f"{100 * a['rank'] / eng.N_CANDIDATES:.2f}", '후보 10개 최고 등수': best})
+    rows.sort(key=lambda r: int(r['회차']))
+    with SCOREBOARD.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=SCOREBOARD_COLUMNS, lineterminator='\n')
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows), sum(float(r['500만 중 상위 %']) for r in rows) / len(rows)
+
+
+def compose(a, target, target_date, setting, candidates, learning, live):
     lines = [f"연금복권720+ {a['round']}회 결과 · {a['date']}",
              f"1등 {a['group']}조 {a['main']}", f"보너스 각조 {a['bonus']}", '',
              '엔진으로 본 이번 번호', *analysis_lines(a)]
     previous = previous_lines(a)
     if previous:
         lines += ['', *previous]
+    if learning or live:
+        lines += ['', '학습', *learning]
+        if live:
+            lines.append(f'· 실전 누적 {live[0]}주 평균: 실제 1등이 500만 중 상위 {live[1]:.1f}%')
     lines += ['', f'{target}회 후보 {len(candidates)}개 · {target_date}',
               *(f'{rank}. {g}조 {num}' for rank, g, num, _ in candidates),
               '', f'설정: {setting.label()}', f'{RESULTS_URL}/round_{target}']
@@ -340,15 +364,23 @@ def main():
         print(f'{target}회 후보는 이미 보냈습니다. 새 회차 없음.')
         return
 
-    if new or not (target_dir / '후보15.csv').exists():
-        setting, mean_ranks, context, models, selected, scores, parts = eng.run(draws)
-        eng.save(target_dir, context, setting, mean_ranks, models, selected, scores, parts)
-    setting = read_setting(target_dir)
     previous_dir = RESULTS / f'round_{target - 1}'
-    analysis = analyze(draws, read_setting(previous_dir) or setting, read_candidates(previous_dir))
+    last_method = read_method(previous_dir)
+    learned = target_dir / '학습.txt'
+    prepared = eng.prepare(draws, learn.LEARN_FOLDS)
+    if new or not (target_dir / '후보15.csv').exists() or not learned.exists():
+        champion = last_method or learn.DEFAULT
+        method, learning, learning_md = learn.learn(draws, champion, prepared)
+        setting, _, context, models, selected, scores, parts = eng.run(draws, method=method, prepared=prepared)
+        eng.save(target_dir, context, setting, None, models, selected, scores, parts, extra=learning_md)
+        learned.write_text('\n'.join(learning) + '\n', encoding='utf-8')
+    setting = read_method(target_dir)
+    learning = learned.read_text(encoding='utf-8').splitlines()
+    analysis = analyze(draws, last_method or setting, read_candidates(previous_dir), prepared)
     write_analysis(previous_dir, analysis)
+    live = record(analysis, last_method) if last_method and (previous_dir / '방법.txt').exists() else None
     target_date = (draws.dates[-1] + timedelta(days=7)).isoformat()
-    message = compose(analysis, target, target_date, setting, read_candidates(target_dir))
+    message = compose(analysis, target, target_date, setting, read_candidates(target_dir), learning, live)
     print(message)
     if args.no_send:
         return

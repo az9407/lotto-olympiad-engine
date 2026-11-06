@@ -621,9 +621,9 @@ def _prefix(flags):
     return out
 
 
-def _windows(n):
-    """롤링 학습 시점 n-40..n과 각 시점의 전체·최근100·최근40 시작 행."""
-    ends = np.arange(max(0, n - ROLLING_FOLDS), n + 1)
+def _windows(n, folds=ROLLING_FOLDS):
+    """롤링 학습 시점 n-folds..n과 각 시점의 전체·최근100·최근40 시작 행."""
+    ends = np.arange(max(0, n - folds), n + 1)
     starts = np.column_stack((np.zeros_like(ends), np.maximum(0, ends - 100), np.maximum(0, ends - 40)))
     return ends, starts
 
@@ -633,7 +633,7 @@ def _window_counts(flags, ends, starts):
     return prefix[:, ends, None] - prefix[:, starts]
 
 
-def build_catalog(draws, stream):
+def build_catalog(draws, stream, folds=ROLLING_FOLDS):
     """롤링 학습 시점 중 한 번이라도 채택 기준을 넘을 수 있는 규칙만 모은다.
 
     시점별 실제 채택은 RuleFold가 그 시점 이전 자료로 다시 판정하므로,
@@ -643,7 +643,7 @@ def build_catalog(draws, stream):
     contexts = [Context(draws, i) for i in range(n)]
     target = Context(draws, n)
     digits, groups = draws.digits(stream), draws.groups
-    ends, starts = _windows(n)
+    ends, starts = _windows(n, folds)
     ante = antecedents(contexts)
     ante_active = np.stack([a.active for a in ante])
     ante_now = np.column_stack((ante_active, [a.holds(target) for a in ante]))[:, ends]
@@ -749,14 +749,34 @@ class Space:
 
 @dataclass(frozen=True)
 class Setting:
+    """채점 방법. 앞 네 값은 기본 16개 조합, 뒤 세 값은 주간 학습이 바꿔 보는 값."""
     time_weights: tuple   # 최근 40회 / 그 앞 60회 / 나머지
     threshold: float
     shrink: int
     limit: int
+    var_cap: int = 2              # 같은 변수 규칙 최대 개수
+    place_boost: bool = True      # 끝자리 쪽 자리 배율 사용
+    mix: tuple = (0.8, 0.2)       # 종합점수의 1등 z, 보너스 z 비율
 
     def label(self):
         weights = '/'.join(f'{v:g}' for v in self.time_weights)
-        return f'시간 가중치 {weights} · 적중률 문턱 {self.threshold:.0%} · 수축 {self.shrink} · 규칙 상한 {self.limit}개'
+        text = f'시간 가중치 {weights} · 적중률 문턱 {self.threshold:.0%} · 수축 {self.shrink} · 규칙 상한 {self.limit}개'
+        if self.var_cap != 2:
+            text += f' · 같은 변수 {self.var_cap}개'
+        if not self.place_boost:
+            text += ' · 자리 배율 끔'
+        if self.mix != (0.8, 0.2):
+            text += f' · 1등:보너스 {self.mix[0]:g}:{self.mix[1]:g}'
+        return text
+
+    def to_text(self):
+        return '\n'.join(f'{k}={v}' for k, v in self.__dict__.items()) + '\n'
+
+    @classmethod
+    def from_text(cls, text):
+        import ast
+        values = dict(line.split('=', 1) for line in text.strip().splitlines() if '=' in line)
+        return cls(**{k: ast.literal_eval(v) for k, v in values.items()})
 
 
 SETTINGS = tuple(Setting(*args) for args in itertools.product(
@@ -869,12 +889,13 @@ class RuleFold:
                 continue
             shrunk = (h_w + setting.shrink * c.baseline) / (n_w + setting.shrink)
             weight = _logit(shrunk) - _logit(c.baseline)
+            multiplier = c.rule.multiplier if setting.place_boost else 1.0
             fitted.append(Fitted(c.rule, c.baseline, (c.counts[0], n_w, *c.counts[1:]),
-                                 (rates[0], h_w / n_w, *rates[1:]), weight, weight * c.rule.multiplier, c.mask))
+                                 (rates[0], h_w / n_w, *rates[1:]), weight, weight * multiplier, c.mask))
         fitted.sort(key=lambda f: (-f.adjusted, f.rule.formula))
         kept, per_variable = [], Counter()
         for item in fitted:
-            if per_variable[item.rule.metric.variable] >= 2:
+            if per_variable[item.rule.metric.variable] >= setting.var_cap:
                 continue
             if any(self.conflict(item, k, w) for k in kept):
                 continue
@@ -961,30 +982,37 @@ def rank_sample(draws, index):
     return np.append(sample, np.int32(answer))
 
 
-def tune(draws, catalogs, histories, space, log_progress=True):
-    """최근 40회 각각을 그 이전 자료로만 학습해, 실제 1등 후보의 평균 순위가 가장 좋은 설정을 고른다."""
+def evaluate(draws, catalogs, histories, space, methods, folds=ROLLING_FOLDS, log_progress=True):
+    """최근 folds회 각각을 그 이전 자료로만 학습해, 무작위 20만 후보 안 실제 1등의 순위. (방법 수, folds) 배열."""
     n = len(draws.rounds)
-    total_rank = np.zeros(len(SETTINGS))
-    for done, ix in enumerate(range(n - ROLLING_FOLDS, n), 1):
+    ranks = np.zeros((len(methods), folds))
+    for f, ix in enumerate(range(n - folds, n)):
         context = Context(draws, ix)
-        folds = [RuleFold(cat, hist, context, space) for cat, hist in zip(catalogs, histories)]
+        rule_folds = [RuleFold(cat, hist, context, space) for cat, hist in zip(catalogs, histories)]
         ids = rank_sample(draws, ix)
         digits, groups = split_ids(ids)
-        ties = {w: tie_term(digits, groups, frequency_logs(draws, ix, w)) for w in {s.time_weights for s in SETTINGS}}
+        ties = {w: tie_term(digits, groups, frequency_logs(draws, ix, w)) for w in {m.time_weights for m in methods}}
         cache = [{}, {}]
-        for s, setting in enumerate(SETTINGS):
+        for s, method in enumerate(methods):
             parts = []
-            for stream, fold in enumerate(folds):
-                model = fold.fit(setting)
+            for stream, fold in enumerate(rule_folds):
+                model = fold.fit(method)
                 key = tuple((id(r.rule), r.adjusted) for r in model.rules)
                 if key not in cache[stream]:
                     cache[stream][key] = model.score(ids)
                 parts.append(cache[stream][key])
-            joint = 0.8 * parts[0] + 0.2 * parts[1] + ties[setting.time_weights]
-            total_rank[s] += 1 + np.count_nonzero(joint[:-1] > joint[-1]) + 0.5 * np.count_nonzero(joint[:-1] == joint[-1])
-        if log_progress and done % 10 == 0:
-            print(f'롤링 검증 {done}/{ROLLING_FOLDS}회', file=sys.stderr, flush=True)
-    return SETTINGS[int(np.argmin(total_rank))], total_rank / ROLLING_FOLDS
+            joint = method.mix[0] * parts[0] + method.mix[1] * parts[1] + ties[method.time_weights]
+            ranks[s, f] = 1 + np.count_nonzero(joint[:-1] > joint[-1]) + 0.5 * np.count_nonzero(joint[:-1] == joint[-1])
+        if log_progress and (f + 1) % 10 == 0:
+            print(f'롤링 검증 {f + 1}/{folds}회', file=sys.stderr, flush=True)
+    return ranks
+
+
+def tune(draws, catalogs, histories, space, log_progress=True):
+    """기본 16개 설정 중 최근 40회 평균 순위가 가장 좋은 것."""
+    ranks = evaluate(draws, catalogs, histories, space, SETTINGS, ROLLING_FOLDS, log_progress)
+    total = ranks.sum(axis=1)
+    return SETTINGS[int(np.argmin(total))], total / ROLLING_FOLDS
 
 
 def score_all(draws, setting, models, index=None):
@@ -995,7 +1023,7 @@ def score_all(draws, setting, models, index=None):
     for start in range(0, N_CANDIDATES, 250_000):
         ids = np.arange(start, start + 250_000, dtype=np.int32)
         digits, groups = split_ids(ids)
-        scores[start:start + 250_000] = (0.8 * parts[0, ids] + 0.2 * parts[1, ids]
+        scores[start:start + 250_000] = (setting.mix[0] * parts[0, ids] + setting.mix[1] * parts[1, ids]
                                          + tie_term(digits, groups, logs))
     return scores, parts
 
@@ -1105,12 +1133,16 @@ def check_selection(ids, scores):
 
 # ---------------------------------------------------------------- 실행과 저장
 
-def run(draws, log_progress=True):
-    """목표 회차 결과를 계산한다. 반환: (setting, 평균순위, context, models, selected, scores, parts)."""
-    catalogs = [build_catalog(draws, stream) for stream in (MAIN, BONUS)]
-    histories = [HistoryIndex(c) for c in catalogs]
-    space = Space()
-    setting, mean_ranks = tune(draws, catalogs, histories, space, log_progress)
+def run(draws, log_progress=True, method=None, prepared=None):
+    """목표 회차 결과를 계산한다. 반환: (setting, 평균순위, context, models, selected, scores, parts).
+
+    method를 주면 16개 설정 비교 없이 그 방법을 쓴다. prepared는 (catalogs, histories, space) 재사용.
+    """
+    catalogs, histories, space = prepared or prepare(draws)
+    if method is None:
+        setting, mean_ranks = tune(draws, catalogs, histories, space, log_progress)
+    else:
+        setting, mean_ranks = method, None
     context = Context(draws, len(draws.rounds))
     models = [RuleFold(cat, hist, context, space).fit(setting) for cat, hist in zip(catalogs, histories)]
     if log_progress:
@@ -1118,6 +1150,11 @@ def run(draws, log_progress=True):
     scores, parts = score_all(draws, setting, models)
     selected = select(scores)
     return setting, mean_ranks, context, models, selected, scores, parts
+
+
+def prepare(draws, folds=ROLLING_FOLDS):
+    catalogs = [build_catalog(draws, stream, folds) for stream in (MAIN, BONUS)]
+    return catalogs, [HistoryIndex(c) for c in catalogs], Space()
 
 
 def summary(number):
@@ -1163,23 +1200,28 @@ def _write_csv(path, columns, rows):
         writer.writerows(rows)
 
 
-def save(out_dir, context, setting, mean_ranks, models, selected, scores, parts):
+def save(out_dir, context, setting, mean_ranks, models, selected, scores, parts, extra=''):
+    """결과.md·후보15.csv·적용규칙.csv·방법.txt. mean_ranks가 있으면 16개 설정 비교표, extra는 덧붙일 본문."""
     out_dir.mkdir(parents=True, exist_ok=True)
     candidates = list(candidate_rows(selected, scores, parts, models))
     rules = list(rule_rows(context, models))
     _write_csv(out_dir / '후보15.csv', CANDIDATE_COLUMNS, candidates)
     _write_csv(out_dir / '적용규칙.csv', RULE_COLUMNS, rules)
+    (out_dir / '방법.txt').write_text(setting.to_text(), encoding='utf-8')
     title = f'연금복권720+ {context.round}회 · {context.date.isoformat()}'
-    tuning = '\n'.join(f'| {s.label()} | {r:,.1f} |' for s, r in zip(SETTINGS, mean_ranks))
     report = (f'# {title}\n\n'
               f'선택 설정: {setting.label()}\n\n'
               f'500만 후보 전수 채점 · 15개 선정 · 적용 규칙 1등 {len(models[0].rules)}개 · 보너스 {len(models[1].rules)}개\n\n'
               f'## 후보 15개\n\n{_md_table(CANDIDATE_COLUMNS, candidates)}\n\n'
-              f'## 적용 규칙\n\n{_md_table(RULE_COLUMNS, rules)}\n\n'
-              '## 설정 비교\n\n'
-              f'최근 {ROLLING_FOLDS}회를 그 이전 자료로만 학습했을 때, 무작위 20만 후보 안에서 실제 1등의 평균 순위입니다. '
-              '낮을수록 좋고, 무작위면 약 100,000입니다.\n\n'
-              f'| 설정 | 평균 순위 |\n| --- | ---: |\n{tuning}\n')
+              f'## 적용 규칙\n\n{_md_table(RULE_COLUMNS, rules)}\n')
+    if mean_ranks is not None:
+        tuning = '\n'.join(f'| {s.label()} | {r:,.1f} |' for s, r in zip(SETTINGS, mean_ranks))
+        report += ('\n## 설정 비교\n\n'
+                   f'최근 {ROLLING_FOLDS}회를 그 이전 자료로만 학습했을 때, 무작위 20만 후보 안에서 실제 1등의 평균 순위입니다. '
+                   '낮을수록 좋고, 무작위면 약 100,000입니다.\n\n'
+                   f'| 설정 | 평균 순위 |\n| --- | ---: |\n{tuning}\n')
+    if extra:
+        report += '\n' + extra
     (out_dir / '결과.md').write_text(report, encoding='utf-8')
     return title
 

@@ -1,0 +1,7 @@
+time_weights=(2.0, 1.5, 1.0)
+threshold=0.55
+shrink=20
+limit=40
+var_cap=2
+place_boost=True
+mix=(0.8, 0.2)
