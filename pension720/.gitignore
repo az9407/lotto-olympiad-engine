@@ -1,0 +1,6 @@
+.codex-attachments/
+__pycache__/
+outputs/
+*.xlsx
+*.zip
+*.zip.tmp
