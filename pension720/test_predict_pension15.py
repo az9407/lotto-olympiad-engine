@@ -80,6 +80,27 @@ class LoadTest(unittest.TestCase):
         self.assertEqual(int((draws.bonus[:, 0] == 0).sum()), 36)
 
 
+class WeeklyTest(unittest.TestCase):
+    def test_master_csv_loads_with_leading_zeros(self):
+        draws = eng.load_draws(eng.DATA_CSV)
+        self.assertGreaterEqual(len(draws.rounds), 340)
+        self.assertEqual(''.join(map(str, draws.main[23])), '002989')   # 24회 앞자리 0
+
+    def test_prizes_and_chat_seal(self):
+        try:
+            from . import weekly
+        except ImportError:
+            import weekly
+        self.assertEqual(weekly.prizes(4, '194892', 4, '194892', '288615'), ['1등'])
+        self.assertEqual(weekly.prizes(2, '194892', 4, '194892', '288615'), ['2등'])
+        self.assertEqual(weekly.prizes(2, '904892', 4, '194892', '288615'), ['4등'])
+        self.assertEqual(weekly.prizes(2, '288615', 4, '194892', '288615'), ['보너스'])
+        self.assertEqual(weekly.prizes(2, '000000', 4, '194892', '288615'), [])
+        sealed = weekly.seal('1:x', '123,456')
+        self.assertEqual(weekly.unseal('1:x', sealed), '123,456')
+        self.assertIsNone(weekly.unseal('2:y', sealed))
+
+
 class SelectTest(unittest.TestCase):
     def test_constraints_on_random_scores(self):
         scores = np.random.default_rng(7).normal(size=eng.N_CANDIDATES)

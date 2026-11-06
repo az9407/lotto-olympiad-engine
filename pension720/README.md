@@ -8,14 +8,28 @@ Python 3.10 이상, numpy 2.0 이상, openpyxl이 필요합니다.
 
 ```
 python -m pip install -r requirements.txt
-python pension720/predict_pension15.py "연금복권720_역대당첨번호_1-340회.xlsx"
+python pension720/predict_pension15.py
 ```
 
+- 인자를 생략하면 `pension720/data/당첨번호.csv`를 씁니다. 다른 엑셀이나 CSV를 쓰려면 경로를 붙입니다.
 - 엑셀에는 `당첨번호` 시트와 `회차, 추첨일, 1등 조, 1등 번호, 보너스 번호` 열이 있어야 합니다.
 - 새 회차 행을 추가하고 다시 돌리면 목표가 마지막 회차 + 1, 마지막 추첨일 + 7일로 바뀝니다.
 - 번호 칸이 숫자로 바뀌어 앞자리 0이 사라져도 6자리로 복원합니다.
 - 결과는 `pension720/results/round_<목표회차>/`에 `결과.md`, `후보15.csv`, `적용규칙.csv`로 저장됩니다.
 - 실행 시간은 3분 안팎입니다.
+
+## 매주 자동 실행
+
+`.github/workflows/pension720-weekly.yml`이 목요일 19:45부터 금요일 09:20 KST까지 다섯 번 `weekly.py`를 돌립니다. 이미 보낸 회차면 바로 끝납니다.
+
+1. 동행복권 공식 API, 막히면 nostra-data 공개 저장소에서 새 회차를 받아 `data/당첨번호.csv`와 `data/연금복권720_역대당첨번호.xlsx`에 추가합니다. 두 출처가 다르면 멈춥니다.
+2. 방금 나온 번호를 지난주 모델로 분석해 `results/round_<그 회차>/분석.md`에 씁니다. 500만 중 점수 순위, 충족·빗나간 규칙, 지난주 후보 10개의 등수.
+3. 다음 회차 후보를 계산해 `results/round_<다음 회차>/`에 저장하고, 점수 상위 10개와 분석 요약을 텔레그램 @lotto_pension_bot 으로 보냅니다. 보낸 글은 `텔레그램.txt`로 남습니다.
+4. 금요일 실행까지 새 회차를 못 받으면 텔레그램으로 한 번 알립니다.
+
+필요한 설정: 저장소 Settings → Secrets and variables → Actions에 `TELEGRAM_BOT_TOKEN`. 대화방은 봇에 /start를 보낸 개인 대화방을 처음 실행 때 찾아 `data/telegram_chat.enc`에 봇 토큰 기반 키로 암호화해 둡니다.
+
+손으로 돌리기: `python pension720/weekly.py --no-send` 는 텔레그램 없이 출력만, `--no-fetch` 는 새 회차를 받지 않습니다.
 
 ## 방법
 

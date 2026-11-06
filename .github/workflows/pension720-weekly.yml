@@ -1,0 +1,50 @@
+name: 연금복권720 주간 자동 갱신
+
+# 목요일 19:05 KST 추첨 뒤 여러 번 실행. 이미 보낸 회차면 바로 끝난다.
+on:
+  schedule:
+    - cron: '45 10 * * 4'   # 목 19:45 KST
+    - cron: '20 11 * * 4'   # 목 20:20 KST
+    - cron: '20 12 * * 4'   # 목 21:20 KST
+    - cron: '50 13 * * 4'   # 목 22:50 KST
+    - cron: '20 0 * * 5'    # 금 09:20 KST, 그때까지 못 받으면 텔레그램으로 알림
+  workflow_dispatch:
+  push:
+    paths:
+      - pension720/weekly.py
+      - .github/workflows/pension720-weekly.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pension720-weekly
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet "numpy>=2.0" openpyxl
+      - name: 새 회차 추가·분석·후보 계산·텔레그램 발송
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python pension720/weekly.py
+      - name: 결과 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pension720/data pension720/results
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "연금복권720+ 자동 갱신"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 10
+          done
+          exit 1

@@ -89,13 +89,22 @@ def _as_number(value):
     return text.zfill(6)
 
 
-def load_draws(path: Path) -> Draws:
+def _sheet_rows(path: Path):
+    """엑셀 당첨번호 시트 또는 같은 열을 가진 CSV의 행들."""
+    if path.suffix.lower() == '.csv':
+        with path.open(encoding='utf-8-sig', newline='') as f:
+            yield from csv.reader(f)
+        return
     from openpyxl import load_workbook
-
     book = load_workbook(path, read_only=True, data_only=True)
     if '당첨번호' not in book.sheetnames:
         raise ValueError('엑셀에 당첨번호 시트가 없습니다.')
-    rows = book['당첨번호'].iter_rows(values_only=True)
+    yield from book['당첨번호'].iter_rows(values_only=True)
+    book.close()
+
+
+def load_draws(path: Path) -> Draws:
+    rows = _sheet_rows(path)
     header = [str(v).strip() if v is not None else '' for v in next(rows)]
     if any(name not in header for name in HEADERS):
         raise ValueError('당첨번호 시트에 필수 열이 없습니다: ' + ', '.join(HEADERS))
@@ -113,7 +122,6 @@ def load_draws(path: Path) -> Draws:
                             _as_number(values[3]), _as_number(values[4])))
         except (ValueError, TypeError) as error:
             raise ValueError(f'당첨번호 시트 {line}행: {error}') from error
-    book.close()
     records.sort(key=lambda r: r[0])
     if len(records) < ROLLING_FOLDS + 30:
         raise ValueError(f'최소 {ROLLING_FOLDS + 30}회가 필요합니다.')
@@ -979,9 +987,10 @@ def tune(draws, catalogs, histories, space, log_progress=True):
     return SETTINGS[int(np.argmin(total_rank))], total_rank / ROLLING_FOLDS
 
 
-def score_all(draws, setting, models):
+def score_all(draws, setting, models, index=None):
+    """index 시점(기본: 목표 회차) 모델로 500만 후보 종합점수 S와 (1등 z, 보너스 z)."""
     parts = np.stack([m.full_score() for m in models])
-    logs = frequency_logs(draws, len(draws.rounds), setting.time_weights)
+    logs = frequency_logs(draws, len(draws.rounds) if index is None else index, setting.time_weights)
     scores = np.empty(N_CANDIDATES)
     for start in range(0, N_CANDIDATES, 250_000):
         ids = np.arange(start, start + 250_000, dtype=np.int32)
@@ -1175,7 +1184,12 @@ def save(out_dir, context, setting, mean_ranks, models, selected, scores, parts)
     return title
 
 
+DATA_CSV = Path(__file__).resolve().parent / 'data' / '당첨번호.csv'
+
+
 def find_workbook():
+    if DATA_CSV.exists():
+        return DATA_CSV
     here = Path(__file__).resolve().parent
     for folder in dict.fromkeys((Path.cwd(), here)):
         found = sorted(p for p in folder.glob('*.xlsx') if not p.name.startswith('~$'))
@@ -1188,7 +1202,7 @@ def find_workbook():
 
 def main():
     parser = argparse.ArgumentParser(description='연금복권720+ 다음 회차 후보 15개')
-    parser.add_argument('xlsx', nargs='?', type=Path, help='당첨번호 시트가 있는 엑셀 (생략하면 자동 검색)')
+    parser.add_argument('xlsx', nargs='?', type=Path, help='당첨번호 엑셀 또는 CSV (생략하면 data/당첨번호.csv)')
     parser.add_argument('--out', type=Path, help='결과 폴더 (기본: 스크립트 옆 results/round_<회차>)')
     args = parser.parse_args()
     xlsx = args.xlsx or find_workbook()

@@ -2,5 +2,6 @@
 __pycache__/
 outputs/
 *.xlsx
+!data/*.xlsx
 *.zip
 *.zip.tmp
