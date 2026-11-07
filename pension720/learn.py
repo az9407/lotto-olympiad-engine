@@ -135,7 +135,7 @@ def champion_full(draws, ix, key, setting, prepared, engine_scores=None):
 # ---------------------------------------------------------------- 학습
 
 def learn(draws, formula, setting, prepared, log_progress=True):
-    """반환: (다음 주 공식 key, 다음 주 엔진 설정, 텔레그램용 줄들, 결과.md용 본문)."""
+    """반환: (다음 주 공식 key, 다음 주 엔진 설정, 요약 줄들, 결과.md용 본문, 비교표 행들)."""
     catalogs, histories, space = prepared
     methods = [setting] + challengers(setting, seed=int(draws.rounds[-1]))
     ranks = eng.evaluate(draws, catalogs, histories, space, methods, LEARN_FOLDS, log_progress)
@@ -167,4 +167,7 @@ def learn(draws, formula, setting, prepared, log_progress=True):
           f'차이는 지금 것과의 회차별 순위 차이 평균이며, 평균 2,000 이상 낮고 표준오차 3배를 넘어야 교체합니다.\n\n'
           f'### 엔진 설정\n\n| 설정 | 평균 상위 | 순위 차이 | 표준오차 | 판정 |\n| --- | ---: | ---: | ---: | --- |\n{engine_table}\n\n'
           f'### 다른 공식과 앙상블 {len(frows)}개 중 상위 30개 · 교체 기준 Z {threshold(len(frows)):.2f}\n\n| 공식 | 평균 상위 | 순위 차이 | 표준오차 | 판정 |\n| --- | ---: | ---: | ---: | --- |\n{formula_table}\n')
-    return new_formula, new_setting, lines, md
+    unit = 100 / (eng.RANK_SAMPLE + 1)
+    table = ([('엔진 설정', m.label(), _share(r), d * unit, se * unit, ok) for m, r, d, se, ok in rows]
+             + [('공식', formula_label(k), _share(r), d * unit, se * unit, ok) for k, r, d, se, ok in frows])
+    return new_formula, new_setting, lines, md, table

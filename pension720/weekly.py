@@ -29,8 +29,9 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import predict_pension15 as eng  # noqa: E402
+import excel_report  # noqa: E402
 import learn  # noqa: E402
+import predict_pension15 as eng  # noqa: E402
 
 DATA = eng.DATA_CSV
 XLSX = HERE / 'data' / '연금복권720_역대당첨번호.xlsx'
@@ -350,12 +351,61 @@ def chat_ids(token):
     return sorted(found)
 
 
-def send(text):
+def telegram_file(token, chat, path, caption):
+    """엑셀 같은 파일을 sendDocument로 보낸다."""
+    boundary = secrets.token_hex(16)
+    parts = [(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n').encode('utf-8')
+             for k, v in (('chat_id', chat), ('caption', caption))]
+    parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{path.name}"\r\n'
+                  'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n')
+                 .encode('utf-8') + path.read_bytes() + b'\r\n')
+    parts.append(f'--{boundary}--\r\n'.encode())
+    request = urllib.request.Request(f'https://api.telegram.org/bot{token}/sendDocument', data=b''.join(parts),
+                                     headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        out = json.load(response)
+    if not out.get('ok'):
+        raise RuntimeError(f"텔레그램 sendDocument 실패: {out.get('description')}")
+
+
+def send(text, document=None, caption=''):
     token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
     if not token:
         raise SystemExit('TELEGRAM_BOT_TOKEN이 없어 보내지 못했습니다.')
     for chat in chat_ids(token):
         telegram(token, 'sendMessage', chat_id=chat, text=text, disable_web_page_preview='true')
+        if document is not None:
+            telegram_file(token, chat, document, caption)
+
+
+LEARN_TABLE = ('구분', '방법', '평균 상위 %', '차이 %p', '표준오차 %p', '교체 기준 통과')
+
+
+def write_learn_table(path, table):
+    with path.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(LEARN_TABLE)
+        writer.writerows((k, n, f'{m:.3f}', f'{d:.3f}', f'{se:.3f}', int(ok)) for k, n, m, d, se, ok in table)
+
+
+def read_learn_table(path):
+    if not path.exists():
+        return []
+    with path.open(encoding='utf-8-sig', newline='') as f:
+        return [(r['구분'], r['방법'], float(r['평균 상위 %']), float(r['차이 %p']), float(r['표준오차 %p']),
+                 r['교체 기준 통과'] == '1') for r in csv.DictReader(f)]
+
+
+def read_scoreboard():
+    if not SCOREBOARD.exists():
+        return []
+    with SCOREBOARD.open(encoding='utf-8-sig', newline='') as f:
+        return [dict(r) for r in csv.DictReader(f)]
+
+
+def numbers_only(candidates):
+    """텔레그램 본문: 상위 10개 번호만."""
+    return '\n'.join(f'{rank}. {g}조 {num}' for rank, g, num, _ in candidates)
 
 
 # ---------------------------------------------------------------- 실행
@@ -389,10 +439,12 @@ def main():
     last_formula, last_setting = read_method(previous_dir)
     learned = target_dir / '학습.txt'
     prepared = eng.prepare(draws, learn.LEARN_FOLDS)
+    notes = [f"새 회차 추가: {', '.join(r['회차'] + '회' for r in new)}"] if new else []
+    notes += [f'당첨번호 받기 실패한 출처: {e}' for e in errors]
     if new or not (target_dir / '후보10.csv').exists() or not learned.exists():
-        for error in learn.lab.update_macro():
-            print('매크로 자료 받기 실패', error, file=sys.stderr)
-        formula, setting, learning, learning_md = learn.learn(
+        macro_errors = learn.lab.update_macro()
+        notes += [f'매크로 지표 받기 실패: {e}' for e in macro_errors] or ['매크로 지표 최신 값으로 갱신']
+        formula, setting, learning, learning_md, table = learn.learn(
             draws, last_formula or 'engine', last_setting or learn.DEFAULT, prepared)
         n = len(draws.rounds)
         engine_scores, parts, models, context = learn.engine_full(draws, n, setting, prepared)
@@ -405,6 +457,7 @@ def main():
             write_picks(target_dir / '후보15.csv', picks15, scores)
         write_picks(target_dir / '후보10.csv', picks10, scores)
         write_method(target_dir, formula, setting)
+        write_learn_table(target_dir / '학습표.csv', table)
         learned.write_text('\n'.join(learning) + '\n', encoding='utf-8')
     formula, setting = read_method(target_dir)
     learning = learned.read_text(encoding='utf-8').splitlines()
@@ -413,11 +466,19 @@ def main():
     write_analysis(previous_dir, analysis)
     live = record(analysis) if (previous_dir / '방법.txt').exists() else None
     target_date = (draws.dates[-1] + timedelta(days=7)).isoformat()
-    message = compose(analysis, target, target_date, formula, setting, read_candidates(target_dir), learning, live)
+    candidates = read_candidates(target_dir)
+    (target_dir / '분석.txt').write_text(
+        compose(analysis, target, target_date, formula, setting, candidates, learning, live) + '\n', encoding='utf-8')
+    workbook = excel_report.build(
+        target_dir / f'연금복권720_{target}회_분석과_개선.xlsx', analysis, target, target_date, learn.formula_label,
+        candidates, learning, read_learn_table(target_dir / '학습표.csv'), live, read_scoreboard(), notes,
+        learn.formula_label(formula, setting))
+    message = numbers_only(candidates)
     print(message)
+    print(workbook)
     if args.no_send:
         return
-    send(message)
+    send(message, workbook, f"{analysis['round']}회 결과 분석과 개선 · {target}회 후보 {len(candidates)}개")
     (target_dir / '텔레그램.txt').write_text(message + '\n', encoding='utf-8')
 
 

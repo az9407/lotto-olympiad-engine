@@ -96,6 +96,13 @@ class WeeklyTest(unittest.TestCase):
         self.assertEqual(weekly.prizes(2, '904892', 4, '194892', '288615'), ['4등'])
         self.assertEqual(weekly.prizes(2, '288615', 4, '194892', '288615'), ['보너스'])
         self.assertEqual(weekly.prizes(2, '000000', 4, '194892', '288615'), [])
+        cands = [(1, 4, '446334', '3.65'), (2, 5, '047616', '2.70')]
+        self.assertEqual(weekly.numbers_only(cands), '1. 4조 446334\n2. 5조 047616')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 't.csv'
+            rows = [('엔진 설정', 'A', 46.0, -0.5, 1.2, False), ('공식', 'B', 41.7, -4.3, 2.0, True)]
+            weekly.write_learn_table(path, rows)
+            self.assertEqual(weekly.read_learn_table(path), rows)
         sealed = weekly.seal('1:x', '123,456')
         self.assertEqual(weekly.unseal('1:x', sealed), '123,456')
         self.assertIsNone(weekly.unseal('2:y', sealed))
