@@ -321,7 +321,7 @@ def run(df, minutes, seed, forward_hist=None, log=print):
     fh = forward_hist or {}
 
     def keep_key(e):
-        h = fh.get(e["name"], {})
+        h = {r: v for r, v in fh.get(e["name"], {}).items() if int(r) > e.get("round", 0)}
         if len(h) >= 20:
             return (0, float(np.mean(list(h.values()))))
         return (1, e["fit"])

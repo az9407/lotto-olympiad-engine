@@ -190,10 +190,15 @@ def formula_step(tuner, N, names, eval_round, no_backfill=()):
     return {n: F[n].get(str(N)) for n in names}
 
 
-def bonferroni_z(m, alpha=0.05):
-    """도전자 m개를 동시에 겨룰 때 우연 교체를 막는 기준, 연금복권 쪽과 같은 방식"""
+def bonferroni_z(m, alpha=0.05, n=None):
+    """도전자 m개를 동시에 겨룰 때 우연 교체를 막는 기준, 연금복권 쪽과 같은 방식.
+    겹치는 회차 n이 적으면 정규분포가 너무 관대해서 t분포를 씀"""
+    p = 1 - alpha / max(m, 1)
+    if n is not None and n > 1:
+        from scipy.stats import t as tdist
+        return max(Z, float(tdist.ppf(p, n - 1)))
     from statistics import NormalDist
-    return max(Z, NormalDist().inv_cdf(1 - alpha / max(m, 1)))
+    return max(Z, NormalDist().inv_cdf(p))
 
 
 def all_methods(tuner):
@@ -228,7 +233,7 @@ def decide(tuner, N, default, start_after=None):
         d = np.array([h[r] - M[champ][r] for r in rs])
         m = float(d.mean())
         se = float(d.std(ddof=1) / np.sqrt(len(d)))
-        if m <= -MIN_GAIN and (se == 0 or m / se <= -zcrit):
+        if m <= -MIN_GAIN and (se == 0 or m / se <= -bonferroni_z(len(M) - 1, n=len(d))):
             if best is None or m < best[1]:
                 best = (mid, m, se, len(d))
     old = champ

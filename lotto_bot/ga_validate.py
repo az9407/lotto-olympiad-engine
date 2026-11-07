@@ -33,8 +33,23 @@ def pcts(d, pr, ts):
     return np.array([SE.EX.rank_pct(S[i], pr.X[t]) for i, t in enumerate(ts)])
 
 
+def parts(d, pr, ts):
+    """회차별 평균 순위 %와 공정한 상위 10% 확률. 동점 묶음은 무작위로 나눈 것으로 계산"""
+    S = SE.score_rows(d, pr, ts)
+    pc, ft = [], []
+    for i, t in enumerate(ts):
+        gt, eq = SE.EX.rank_parts(S[i], pr.X[t])
+        pc.append((gt + 0.5 * eq) * 100)
+        ft.append(SE.EX.fair_top(gt, eq))
+    return np.array(pc), np.array(ft)
+
+
 def obj(v, goal):
     return float(v.mean()) if goal == "mean" else -float((v <= 10).mean() * 100)
+
+
+def obj2(pc, ft, goal):
+    return float(pc.mean()) if goal == "mean" else -float(ft.mean() * 100)
 
 
 def stage1(df, minutes, goal, seed, out):
@@ -94,19 +109,19 @@ def stage2(df, files, out, keep=10):
         goal = D["goal"]
         rows = []
         for e in D["top"]:
-            vB = pcts(e["def"], pr, tsB)
-            rows.append((obj(vB, goal), e, vB))
+            pB, fB = parts(e["def"], pr, tsB)
+            rows.append((obj2(pB, fB, goal), e, pB, fB))
         rows.sort(key=lambda x: x[0])
         chosen = []
-        for oB, e, vB in rows[:keep]:
-            vA = pcts(e["def"], pr, tsA)
-            vC = pcts(e["def"], pr, tsC)
+        for oB, e, pB, fB in rows[:keep]:
+            pA, fA = parts(e["def"], pr, tsA)
+            pC, fC = parts(e["def"], pr, tsC)
             chosen.append(dict(name=SE.def_name(e["def"]), desc=SE.describe(e["def"]), def_=e["def"],
-                               A_mean=float(vA.mean()), A_top10=float((vA <= 10).mean() * 100),
-                               B_mean=float(vB.mean()), B_top10=float((vB <= 10).mean() * 100),
-                               C_mean=float(vC.mean()), C_se=float(vC.std(ddof=1) / np.sqrt(len(vC))),
-                               C_top10=float((vC <= 10).mean() * 100),
-                               C_by_round={str(int(t) + 1): round(float(x), 4) for t, x in zip(tsC, vC)}))
+                               A_mean=float(pA.mean()), A_top10=float(fA.mean() * 100),
+                               B_mean=float(pB.mean()), B_top10=float(fB.mean() * 100),
+                               C_mean=float(pC.mean()), C_se=float(pC.std(ddof=1) / np.sqrt(len(pC))),
+                               C_top10=float(fC.mean() * 100),
+                               C_by_round={str(int(t) + 1): round(float(x), 4) for t, x in zip(tsC, pC)}))
         allB = np.array([r[0] for r in rows])
         res[f] = dict(goal=goal, tested=D["tested"], stage2_pool=len(rows), chosen=chosen,
                       B_spread=[float(allB.min()), float(np.median(allB)), float(allB.max())])

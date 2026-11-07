@@ -40,6 +40,30 @@ def rank_pct(s, actual, L=3000):
     return float((row[a + 1:].sum() + 0.5 * row[a]) / TOTAL * 100)
 
 
+def rank_parts(s, actual, L=3000):
+    """실제 조합보다 점수가 높은 비율 gt, 같은 비율 eq. 동점이 많은 공식의 상위 10% 비율을 공정하게 셀 때 씀"""
+    v = np.asarray(s[1:], float)
+    lo, hi = v.min(), v.max()
+    if hi - lo < 1e-12:
+        return 0.0, 1.0
+    q = np.rint((v - lo) / (hi - lo) * L).astype(int)
+    dp = np.zeros((7, 6 * L + 1))
+    dp[0, 0] = 1
+    for x in q:
+        for k in range(6, 0, -1):
+            dp[k, x:] += dp[k - 1, :dp.shape[1] - x]
+    a = int(q[np.asarray(actual) - 1].sum())
+    row = dp[6]
+    return float(row[a + 1:].sum() / TOTAL), float(row[a] / TOTAL)
+
+
+def fair_top(gt, eq, cut=0.10):
+    """동점 묶음 안에서 무작위로 줄 세웠을 때 상위 cut 안에 들 확률, 무작위 공식이면 평균이 정확히 cut"""
+    if eq <= 0:
+        return float(gt < cut)
+    return float(np.clip((cut - gt) / eq, 0, 1))
+
+
 def indicators(df):
     """회차 t의 점수는 t-1회까지로만 계산. 반환: 이름 → (N, 46) 배열"""
     X, B = R_hist(df)
@@ -176,7 +200,7 @@ def ml_models():
     from sklearn.linear_model import LogisticRegression
     return {"머신러닝:로지스틱": lambda: LogisticRegression(C=0.05, max_iter=2000),
             "머신러닝:부스팅": lambda: HistGradientBoostingClassifier(
-                max_depth=3, learning_rate=0.03, max_iter=150, l2_regularization=1.0)}
+                max_depth=3, learning_rate=0.03, max_iter=150, l2_regularization=1.0, random_state=0)}
 
 
 SWITCH_BASES = ("빈도30", "미출현", "전이", "MACD")

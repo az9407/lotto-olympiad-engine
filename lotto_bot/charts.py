@@ -19,7 +19,13 @@ def real_macro_up(dates):
         try:
             m = pd.read_csv(MACRO_CSV)
             m["날짜"] = pd.to_datetime(m["날짜"])
-            _MACRO["df"] = {k: g.sort_values("날짜").set_index("날짜")["값"] for k, g in m.groupby("지표")}
+            series = {}
+            for k, g in m.groupby("지표"):
+                s = g.sort_values("날짜").set_index("날짜")["값"]
+                if len(s) > 1 and s.index.to_series().diff().dt.days.median() > 20:
+                    s.index = s.index + pd.Timedelta(days=35)   # 월평균은 그 달이 끝나야 알 수 있음
+                series[k] = s
+            _MACRO["df"] = series
         except Exception:  # noqa: BLE001
             _MACRO["df"] = {}
     out = {}
