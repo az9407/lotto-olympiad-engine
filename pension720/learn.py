@@ -10,7 +10,9 @@ Z는 도전자 수만큼 여러 번 시험하는 것을 감안해 우연히 통�
 """
 from __future__ import annotations
 
+import importlib
 import random
+import sys
 from dataclasses import replace
 from math import sqrt
 from statistics import NormalDist
@@ -43,9 +45,34 @@ MIN_GAIN = 0.01 * eng.RANK_SAMPLE
 DEFAULT = eng.Setting((2.0, 1.5, 1.0), 0.55, 20, 40)
 
 
+EXTRA_MODULES = ('lab_math', 'lab_signal', 'lab_ml', 'lab_external')
+
+
+def _extra_module(name):
+    try:
+        return importlib.import_module(f'{__package__}.{name}' if __package__ else name)
+    except Exception:
+        return None
+
+
+def all_formulas(draws):
+    """lab.py 공식 + 추가 실험실 모듈(있는 것만)의 공식. 모듈 하나가 실패해도 나머지는 그대로 쓴다."""
+    macro = lab.load_macro()
+    out = list(lab.creative_formulas(draws, macro))
+    for name in EXTRA_MODULES:
+        module = _extra_module(name)
+        if module is None:
+            continue
+        try:
+            out += list(module.formulas(draws, macro))
+        except Exception as e:   # 외부 자료가 없거나 깨져도 주간 실행은 계속
+            print(f'{name} 공식 건너뜀: {e}', file=sys.stderr, flush=True)
+    return out
+
+
 def pool(draws):
     """2단계에서 겨루는 공식들 (무작위 기준 제외)."""
-    return [f for f in lab.creative_formulas(draws, lab.load_macro()) if f.key != 'random']
+    return [f for f in all_formulas(draws) if f.key != 'random']
 
 
 def threshold(challengers_count):
@@ -121,7 +148,7 @@ def champion_full(draws, ix, key, setting, prepared, engine_scores=None):
     if key == 'engine':
         return engine_scores if engine_scores is not None else engine_full(draws, ix, setting, prepared)[0]
     members = fs.ENSEMBLES[key][1] if key in fs.ENSEMBLES else (key,)
-    registry = {f.key: f for f in lab.creative_formulas(draws, lab.load_macro())}
+    registry = {f.key: f for f in all_formulas(draws)}
     parts = []
     for m in members:
         if m == 'engine':
