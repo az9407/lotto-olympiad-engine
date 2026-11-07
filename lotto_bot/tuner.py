@@ -208,6 +208,19 @@ def all_methods(tuner):
     return d
 
 
+def leaderboard(tuner, N, start_after=None):
+    """후보 전체: 이름, 이번 회차 %, 최근 60회 평균, 회차 수. 탐색 공식은 발견 이후만"""
+    M = all_methods(tuner)
+    rows = []
+    for mid, h in M.items():
+        r0 = (start_after or {}).get(mid)
+        hh = {r: v for r, v in h.items() if r0 is None or int(r) > r0}
+        m, n = recent_mean(hh, N)
+        rows.append(dict(name=mid, this=h.get(str(N)), mean60=m, n=n, found=r0))
+    rows.sort(key=lambda x: (x["mean60"] is None or x["n"] < MIN_COMMON, x["mean60"] if x["mean60"] is not None else 1e9))
+    return rows
+
+
 def recent_mean(h, N):
     v = [x for r, x in h.items() if 0 <= N - int(r) < WINDOW_CHAMP]
     return (float(np.mean(v)), len(v)) if v else (None, 0)
@@ -223,7 +236,7 @@ def decide(tuner, N, default, start_after=None):
     if champ not in M:
         champ = default if default in M else "A"
     best = None
-    zcrit = bonferroni_z(len(M) - 1)
+    closest = None
     for mid, h in M.items():
         if mid == champ:
             continue
@@ -233,7 +246,10 @@ def decide(tuner, N, default, start_after=None):
         d = np.array([h[r] - M[champ][r] for r in rs])
         m = float(d.mean())
         se = float(d.std(ddof=1) / np.sqrt(len(d)))
-        if m <= -MIN_GAIN and (se == 0 or m / se <= -bonferroni_z(len(M) - 1, n=len(d))):
+        zneed = bonferroni_z(len(M) - 1, n=len(d))
+        if se > 0 and m < 0 and (closest is None or m / se < closest[4]):
+            closest = (mid, m, se, len(d), m / se, zneed)
+        if m <= -MIN_GAIN and (se == 0 or m / se <= -zneed):
             if best is None or m < best[1]:
                 best = (mid, m, se, len(d))
     old = champ
@@ -245,7 +261,9 @@ def decide(tuner, N, default, start_after=None):
     top = [(mid, m, n) for (m, n), mid in board if m is not None and n >= MIN_COMMON][:5]
     cm, cn = recent_mean(M[champ], N)
     return dict(old=old, champion=champ, switched=bool(best), gain=best[1] if best else None,
-                champ_mean=cm, champ_n=cn, top=top, n_methods=len(M))
+                champ_mean=cm, champ_n=cn, top=top, n_methods=len(M),
+                closest=dict(name=closest[0], gain=closest[1], se=closest[2], n=closest[3], t=closest[4],
+                             need=closest[5]) if closest else None)
 
 
 def champion_lines(dec, this_round):

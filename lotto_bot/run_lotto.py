@@ -155,6 +155,30 @@ def send(text, dry):
             time.sleep(1)
 
 
+def send_document(path, caption, dry):
+    if dry:
+        print(f"엑셀 파일 {path} 생성, 보내기 생략")
+        return
+    import uuid
+    data = Path(path).read_bytes()
+    for cid in chat_ids():
+        b = uuid.uuid4().hex
+        parts = []
+        for k, v in (("chat_id", str(cid)), ("caption", caption)):
+            parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+        fname = urllib.parse.quote(Path(path).name)
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="document"; filename="{Path(path).name}"; '
+                     f"filename*=UTF-8''{fname}\r\nContent-Type: application/vnd.openxmlformats-officedocument."
+                     f"spreadsheetml.sheet\r\n\r\n".encode() + data + b"\r\n")
+        parts.append(f"--{b}--\r\n".encode())
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token()}/sendDocument", data=b"".join(parts),
+                                     headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            out = json.loads(r.read().decode())
+        if not out.get("ok"):
+            raise RuntimeError(f"텔레그램 sendDocument 실패: {out.get('description')}")
+
+
 def won(v):
     v = int(v)
     if v >= 100_000_000:
@@ -285,7 +309,17 @@ def process(h, st):
                   config_id=new_lead, champion=champ, tuner=tuner,
                   rules=([{k: s[k] for k in ("id", "rule", "basis", "r250", "r50", "w")} for s in nxt["selected"]]
                          if nxt else []))
-    return "\n".join(L), st_new, N
+    prev_rows = []
+    for i, c in enumerate(prev_c, 1):
+        m, rk = lotto_rank(c, nums, bonus)
+        prev_rows.append(dict(rank=i, numbers=c, match=m, prize=rk))
+    report = dict(N=N, date=ymd(last["date"]), nums=nums, bonus=bonus, w1=int(last["w1"]), p1=int(last["p1"]),
+                  prev_label=label, prev_rows=prev_rows, analysis=a, rule_report=rep, decision=dec,
+                  this_all=this_all, champion=champ, T=T, TDATE=ymd(TDATE), picks=picks,
+                  board=TU.leaderboard(tuner, N, starts), used_last=st.get("champion") or lead,
+                  champ_desc=TU.describe("lotto", next(c for c in tuner["configs"] if c["id"] == champ)["params"])
+                  if not (":" in champ) else champ)
+    return "\n".join(L), st_new, N, report
 
 
 def main():
@@ -293,6 +327,7 @@ def main():
     ap.add_argument("--data", help="history.json 경로, 생략하면 인터넷에서 받음")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--search-minutes", type=float, default=None, help="결과마다 공식 탐색 시간, 기본 15분")
     args = ap.parse_args()
     h = load_history(args.data)
     st = load_state()
@@ -301,12 +336,27 @@ def main():
         print(f"로또 {latest}회 이미 처리함")
         return
     t0 = time.time()
-    text, st_new, N = process(h, st)
-    send(text, args.dry_run)
+    # 결과가 나올 때마다 먼저 새 공식을 찾아 후보 풀에 넣음
+    search_info = None
+    minutes = float(os.environ.get("LOTTO_SEARCH_MINUTES", "15") if args.search_minutes is None else args.search_minutes)
+    if minutes > 0:
+        import search as SE
+        pool, added, tested = SE.run(lotto_df(h), minutes, seed=latest, forward_hist=st.get("tuner", {}).get("formulas", {}))
+        search_info = dict(minutes=minutes, tested=tested, added=added, pool=len(pool["defs"]), total=pool["tested"])
+        print(f"탐색 {tested}개 시험, 새 후보 {len(added)}개")
+    text, st_new, N, report = process(h, st)
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / f"lotto_{N:04d}.txt").write_text(text, encoding="utf-8")
+    import report as RP
+    changes = RP.pending_changes(STATE)
+    xlsx = RP.build_excel(report, search_info, changes, RESULTS / f"로또_{N}회_분석_{report['T']}회_후보.xlsx")
+    short = [f"로또 {report['T']}회 상위 10개 · {report['TDATE']} 추첨"]
+    short += [f"{c['rank']:>2}. {' '.join(f'{n:02d}' for n in c['numbers'])}" for c in report["picks"]]
+    send("\n".join(short), args.dry_run)
+    send_document(xlsx, f"로또 {N}회 결과 분석과 개선 내용", args.dry_run)
+    RP.mark_reported(STATE, changes)
     save_state(st_new)
-    print(f"로또 {N}회 처리 {time.time()-t0:.0f}초")
+    print(f"로또 {N}회 처리 {time.time()-t0:.0f}초, 엑셀 {xlsx.name}")
 
 
 if __name__ == "__main__":
