@@ -226,10 +226,12 @@ def process(h, st):
         idx = LE.comb_index([int(row[f"n{i}"]) for i in range(1, 7)])
         res = {n: LE.rank_pct(S, idx) for n, S in FO.score_all(df[df["round"] < r]).items()}
         res.update(CH.pct_for_round(df, r))
+        res.update({n: LE.rank_pct(S, idx) for n, S in CH.combo_scores_next(df[df["round"] < r]).items()})
         return res
 
     starts = CH.pool_start()
-    this_f = TU.formula_step(tuner, N, FO.ALL + CH.names(), eval_formulas, no_backfill=set(starts))
+    this_f = TU.formula_step(tuner, N, FO.ALL + CH.names() + CH.combo_names(), eval_formulas,
+                             no_backfill=set(starts))
     this_all = {**{c["id"]: c["hist"].get(str(N)) for c in tuner["configs"]},
                 **{(n if ":" in n else f"공식:{n}"): v for n, v in this_f.items()}}
     dec = TU.decide(tuner, N, default=st.get("champion") or lead, start_after=starts)
@@ -241,8 +243,13 @@ def process(h, st):
         picks = LE.pick_array(S, K)
         del S
         new_lead = rep["chosen"]
+    elif champ in CH.combo_names():
+        S = CH.combo_scores_next(df)[champ]
+        picks = LE.pick_array(S, K)
+        del S
+        new_lead = rep["chosen"]
     elif champ in CH.names():
-        S = FO.combo_from_num(CH.scores_next(df, with_ml=champ.startswith("머신러닝"))[champ])
+        S = FO.combo_from_num(CH.scores_next(df)[champ])
         picks = LE.pick_array(S, K)
         del S
         new_lead = rep["chosen"]

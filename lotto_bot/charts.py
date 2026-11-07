@@ -40,6 +40,42 @@ def real_macro_up(dates):
     return out
 
 
+IDEAS = {"signal_ideas": "신호:", "graph": "", "meta": ""}
+_IDEA_MODS = {}
+
+
+def _idea(mod):
+    """에이전트가 만든 후보 모듈을 파일 경로로 불러옴, 기본 모듈과 이름이 겹치지 않게"""
+    if mod not in _IDEA_MODS:
+        import importlib.util
+        path = __import__("pathlib").Path(__file__).resolve().parent / "ideas" / f"{mod}.py"
+        spec = importlib.util.spec_from_file_location(f"lotto_idea_{mod}", path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        _IDEA_MODS[mod] = m
+    return _IDEA_MODS[mod]
+
+
+def idea_names():
+    return [IDEAS[mod] + n for mod in IDEAS for n in _idea(mod).NAMES]
+
+
+def combo_names():
+    return list(getattr(_idea("graph"), "COMBO_NAMES", []))
+
+
+def idea_scores_next(df):
+    out = {}
+    for mod, pre in IDEAS.items():
+        for n, s in _idea(mod).scores_next(df).items():
+            out[pre + n] = np.asarray(s, float)
+    return out
+
+
+def combo_scores_next(df):
+    return _idea("graph").combo_scores_next(df)
+
+
 def _with_next_row(df):
     last = df.iloc[-1].copy()
     last["round"] = int(last["round"]) + 1
@@ -63,7 +99,7 @@ def names():
         for b in EX.SWITCH_BASES:
             out.append(f"실물매크로:{k}오르면{b}추세")
     import search as SE
-    return out + SE.pool_names()
+    return out + idea_names() + SE.pool_names()
 
 
 def pool_start():
@@ -105,6 +141,8 @@ def scores_next(df, with_ml=True):
         u = up[k][0]
         for b in EX.SWITCH_BASES:
             out[f"실물매크로:{k}오르면{b}추세"] = ind[b][t] if (u is None or u) else -ind[b][t]
+    if with_ml:
+        out.update(idea_scores_next(df))
     import search as SE
     out.update(SE.pool_scores_next(df))
     return out
