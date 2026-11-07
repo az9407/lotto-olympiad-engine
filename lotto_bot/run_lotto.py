@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import charts as CH        # noqa: E402
 import formulas as FO      # noqa: E402
 import lotto_engine as LE  # noqa: E402
 import tuner as TU         # noqa: E402
@@ -212,17 +213,24 @@ def process(h, st):
     def eval_formulas(r):
         row = df[df["round"] == r].iloc[0]
         idx = LE.comb_index([int(row[f"n{i}"]) for i in range(1, 7)])
-        return {n: LE.rank_pct(S, idx) for n, S in FO.score_all(df[df["round"] < r]).items()}
+        res = {n: LE.rank_pct(S, idx) for n, S in FO.score_all(df[df["round"] < r]).items()}
+        res.update(CH.pct_for_round(df, r))
+        return res
 
-    this_f = TU.formula_step(tuner, N, FO.ALL, eval_formulas)
+    this_f = TU.formula_step(tuner, N, FO.ALL + CH.names(), eval_formulas)
     this_all = {**{c["id"]: c["hist"].get(str(N)) for c in tuner["configs"]},
-                **{f"공식:{n}": v for n, v in this_f.items()}}
+                **{(n if ":" in n else f"공식:{n}"): v for n, v in this_f.items()}}
     dec = TU.decide(tuner, N, default=st.get("champion") or lead)
     champ = dec["champion"]
     T, TDATE = N + 1, pd.Timestamp(last["date"]) + pd.Timedelta(days=7)
     nxt = None
     if champ.startswith("공식:"):
         S = FO.score_all(df, [champ[3:]])[champ[3:]]
+        picks = LE.pick_array(S, K)
+        del S
+        new_lead = rep["chosen"]
+    elif champ in CH.names():
+        S = FO.combo_from_num(CH.scores_next(df, with_ml=champ.startswith("머신러닝"))[champ])
         picks = LE.pick_array(S, K)
         del S
         new_lead = rep["chosen"]

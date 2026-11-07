@@ -193,7 +193,7 @@ def formula_step(tuner, N, names, eval_round):
 def all_methods(tuner):
     d = {c["id"]: c["hist"] for c in tuner["configs"]}
     for n, h in tuner.get("formulas", {}).items():
-        d[f"공식:{n}"] = h
+        d[n if ":" in n else f"공식:{n}"] = h
     return d
 
 
