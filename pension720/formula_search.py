@@ -48,6 +48,7 @@ def engine_joint(fold_pair, setting, draws, ix, ids):
 
 
 LABELS = {}
+ENSEMBLE_MEMBERS = {m for _, members in ENSEMBLES.values() for m in members}
 
 
 def _walk_fold(ix, draws, formulas, setting, catalogs, histories, space):
@@ -58,7 +59,8 @@ def _walk_fold(ix, draws, formulas, setting, catalogs, histories, space):
     for formula in formulas:
         s = np.nan_to_num(np.asarray(formula.fit(draws, ix)(d, g), dtype=float), nan=-1e9)
         out.append(_rank_last(s))
-        z[formula.key] = fm.zscore(s)
+        if use_engine and formula.key in ENSEMBLE_MEMBERS:   # 앙상블에 쓰는 것만 보관 (공식 1,000개 넘으면 수 GB)
+            z[formula.key] = fm.zscore(s)
     if use_engine:
         context = eng.Context(draws, ix)
         pair = [eng.RuleFold(c, h, context, space) for c, h in zip(catalogs, histories)]

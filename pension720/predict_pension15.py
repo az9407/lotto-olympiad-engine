@@ -999,10 +999,17 @@ def parallel_folds(fn, indices, args, workers=None):
     workers = min(workers or WORKERS, len(indices))
     if workers <= 1 or 'fork' not in mp.get_all_start_methods():
         return [fn(ix, *args) for ix in indices]
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
     _PARALLEL.update(fn=fn, args=args)
     chunk = -(-len(indices) // workers)   # 연속 회차를 한 프로세스에 몰아 캐시를 살린다
-    with mp.get_context('fork').Pool(workers) as pool:
-        return pool.map(_parallel_call, indices, chunksize=chunk)
+    try:
+        with ProcessPoolExecutor(workers, mp_context=mp.get_context('fork')) as pool:
+            return list(pool.map(_parallel_call, indices, chunksize=chunk))
+    except BrokenProcessPool:
+        # 프로세스 하나가 메모리 부족 등으로 죽으면 multiprocessing.Pool은 영원히 기다린다. 대신 한 줄로 다시 돈다.
+        print('병렬 프로세스가 죽어 한 프로세스로 다시 돕니다', file=sys.stderr, flush=True)
+        return [fn(ix, *args) for ix in indices]
 
 
 def _evaluate_fold(ix, draws, catalogs, histories, space, methods):
