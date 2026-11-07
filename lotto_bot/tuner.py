@@ -120,7 +120,7 @@ def step(game, tuner, N, base, evaluate, used_id):
         best_id = scored[0][1]
         if len(tuner["configs"]) >= MAX_CONFIGS:
             for s, cid in reversed(scored):
-                if cid not in ("A", best_id):
+                if cid not in ("A", best_id, tuner.get("champion")):
                     removed = cid
                     break
             if removed:
@@ -145,7 +145,7 @@ def step(game, tuner, N, base, evaluate, used_id):
     chosen = ranking[0][1] if ranking else "A"
     chosen_cfg = next(c for c in tuner["configs"] if c["id"] == chosen)
     for c in tuner["configs"]:
-        c["hist"] = {r: v for r, v in c["hist"].items() if N - int(r) < WINDOW * 3}
+        c["hist"] = {r: v for r, v in c["hist"].items() if N - int(r) < KEEP_ROUNDS}
     report = dict(round=N, used=used_id, this_round=this_round, ranking=[(cid, round(s, 2)) for s, cid in ranking],
                   chosen=chosen, chosen_score=ranking[0][0] if ranking else None,
                   chosen_desc=describe(game, chosen_cfg["params"]),
@@ -157,8 +157,99 @@ def step(game, tuner, N, base, evaluate, used_id):
     return tuner, extra, report, chosen_cfg["params"]
 
 
+# ---------------- 공식 후보군 + 챔피언 교체 ----------------
+WINDOW_CHAMP = 60      # 최근 60회로 비교
+KEEP_ROUNDS = 80
+MIN_COMMON = 10        # 같은 회차가 10개 이상 겹쳐야 비교
+MIN_GAIN = 2.0         # 평균 순위가 2%p 이상 앞서고
+Z = 2.0                # 그 차이가 표준오차의 2배를 넘을 때만 교체
+FORMULA_BACKFILL = 12
+
+
+def formula_step(tuner, N, names, eval_round):
+    """eval_round(r) -> {공식이름: pct}. 새 공식은 최근 12회를 채점해서 넣음"""
+    F = tuner.setdefault("formulas", {})
+    for n in names:
+        F.setdefault(n, {})
+    todo = {N}
+    for n in names:
+        if len(F[n]) == 0:
+            todo.update(range(N - FORMULA_BACKFILL + 1, N + 1))
+    for r in sorted(todo):
+        if all(str(r) in F[n] for n in names):
+            continue
+        res = eval_round(r)
+        for n in names:
+            if n in res:
+                F[n][str(r)] = round(res[n], 4)
+    for n in list(F):
+        if n not in names:
+            del F[n]
+            continue
+        F[n] = {r: v for r, v in F[n].items() if N - int(r) < KEEP_ROUNDS}
+    return {n: F[n].get(str(N)) for n in names}
+
+
+def all_methods(tuner):
+    d = {c["id"]: c["hist"] for c in tuner["configs"]}
+    for n, h in tuner.get("formulas", {}).items():
+        d[f"공식:{n}"] = h
+    return d
+
+
+def recent_mean(h, N):
+    v = [x for r, x in h.items() if 0 <= N - int(r) < WINDOW_CHAMP]
+    return (float(np.mean(v)), len(v)) if v else (None, 0)
+
+
+def decide(tuner, N, default):
+    M = all_methods(tuner)
+    champ = tuner.get("champion") or default
+    if champ not in M:
+        champ = default if default in M else "A"
+    best = None
+    for mid, h in M.items():
+        if mid == champ:
+            continue
+        rs = [r for r in h if r in M[champ] and 0 <= N - int(r) < WINDOW_CHAMP]
+        if len(rs) < MIN_COMMON:
+            continue
+        d = np.array([h[r] - M[champ][r] for r in rs])
+        m = float(d.mean())
+        se = float(d.std(ddof=1) / np.sqrt(len(d)))
+        if m <= -MIN_GAIN and (se == 0 or m / se <= -Z):
+            if best is None or m < best[1]:
+                best = (mid, m, se, len(d))
+    old = champ
+    if best:
+        champ = best[0]
+    tuner["champion"] = champ
+    board = sorted(((recent_mean(h, N), mid) for mid, h in M.items()),
+                   key=lambda t: (t[0][0] is None, t[0][0] if t[0][0] is not None else 0))
+    top = [(mid, m, n) for (m, n), mid in board if m is not None and n >= MIN_COMMON][:5]
+    cm, cn = recent_mean(M[champ], N)
+    return dict(old=old, champion=champ, switched=bool(best), gain=best[1] if best else None,
+                champ_mean=cm, champ_n=cn, top=top, n_methods=len(M))
+
+
+def champion_lines(dec, this_round):
+    L = ["", "공식 경쟁"]
+    if this_round:
+        tr = sorted(((v, n) for n, v in this_round.items() if v is not None))[:3]
+        L.append("- 이번 회차 실제 번호를 가장 위에 올린 공식: " + " · ".join(f"{n} {v:.1f}%" for v, n in tr))
+    L.append(f"- 최근 60회 평균 상위 {len(dec['top'])}개, 후보 {dec['n_methods']}개 중: "
+             + " · ".join(f"{mid} {m:.1f}%" for mid, m, n in dec["top"]))
+    if dec["switched"]:
+        L.append(f"- 챔피언 교체 {dec['old']} → {dec['champion']}, 같은 회차 비교 평균 {abs(dec['gain']):.1f}%p 앞섬")
+    else:
+        L.append(f"- 챔피언 유지 {dec['champion']}, 최근 {dec['champ_n']}회 평균 상위 {dec['champ_mean']:.1f}%"
+                 if dec["champ_mean"] is not None else f"- 챔피언 유지 {dec['champion']}")
+    L.append(f"- 교체 기준: 같은 회차끼리 비교해 {MIN_GAIN:g}%p 이상 앞서고 표준오차의 {Z:g}배를 넘을 때만")
+    return L
+
+
 def report_lines(game, rep):
-    L = ["", "스스로 학습"]
+    L = ["", "스스로 학습, 규칙 엔진 설정"]
     tr = " · ".join(f"{cid} {v:.1f}%" for cid, v in rep["this_round"].items() if v is not None)
     L.append(f"- 이번 회차 설정별 성적, 실제 번호가 상위 몇 %였나: {tr}")
     if rep["removed"]:
@@ -167,6 +258,6 @@ def report_lines(game, rep):
         a = rep["added"]
         L.append(f"- {a['parent']}를 바꾼 새 설정 {a['id']} 추가, 최근 6회 평균 상위 {a['score']:.1f}%")
     if rep["chosen_score"] is not None:
-        L.append(f"- 다음 회차 사용 {rep['chosen']}, 최근 12회 가중 평균 상위 {rep['chosen_score']:.1f}%")
+        L.append(f"- 규칙 엔진 설정 중 최근 12회 1등 {rep['chosen']}, 가중 평균 상위 {rep['chosen_score']:.1f}%")
     L.append(f"- {rep['chosen']} 설정: {rep['chosen_desc']}")
     return L

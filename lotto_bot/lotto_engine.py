@@ -492,6 +492,27 @@ def pick(model, k=10):
     return out
 
 
+def pick_array(F, k=10):
+    """규칙 엔진이 아닌 공식 점수 배열에서 같은 다양성 조건으로 k개"""
+    C = CFG
+    COMB = space()["COMB"]
+    top = np.argpartition(-F, 400_000)[:400_000]
+    top = top[np.lexsort((top, -F[top]))]
+    picked, use = [], np.zeros(46, int)
+    for idx in top:
+        c = COMB[idx].astype(int)
+        if (use[c] >= C["MAX_USE"]).any():
+            continue
+        if any(len(set(c) & set(COMB[p].astype(int))) > C["MAX_OVERLAP"] for p in picked):
+            continue
+        picked.append(int(idx))
+        use[c] += 1
+        if len(picked) == k:
+            break
+    return [dict(rank=r, numbers=COMB[i].astype(int).tolist(), score=round(float(F[i]), 6))
+            for r, i in enumerate(picked, 1)]
+
+
 def comb_index(nums):
     COMB = space()["COMB"]
     a = np.array(sorted(nums), np.int8)

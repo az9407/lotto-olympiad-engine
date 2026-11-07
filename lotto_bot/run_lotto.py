@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import formulas as FO      # noqa: E402
 import lotto_engine as LE  # noqa: E402
 import tuner as TU         # noqa: E402
 
@@ -198,8 +199,8 @@ def process(h, st):
         del m
         return pct, extra
 
-    tuner, extra, rep, params = TU.step("lotto", st.get("tuner"), N, LE.BASE_PARAMS, evaluate,
-                                        st.get("config_id", "A"))
+    lead = st.get("config_id", "A")
+    tuner, extra, rep, params = TU.step("lotto", st.get("tuner"), N, LE.BASE_PARAMS, evaluate, lead)
     if extra is None:
         _, extra = evaluate(params, N, True)
     a, recomputed = extra
@@ -207,8 +208,29 @@ def process(h, st):
         prev_c, label = [c["numbers"] for c in st["candidates"]], "보낸 후보 10개"
     else:
         prev_c, label = [c["numbers"] for c in recomputed], "엔진 재계산 후보 10개"
-    nxt = LE.build_model(df, params)
-    picks = LE.pick(nxt, K)
+
+    def eval_formulas(r):
+        row = df[df["round"] == r].iloc[0]
+        idx = LE.comb_index([int(row[f"n{i}"]) for i in range(1, 7)])
+        return {n: LE.rank_pct(S, idx) for n, S in FO.score_all(df[df["round"] < r]).items()}
+
+    this_f = TU.formula_step(tuner, N, FO.ALL, eval_formulas)
+    this_all = {**{c["id"]: c["hist"].get(str(N)) for c in tuner["configs"]},
+                **{f"공식:{n}": v for n, v in this_f.items()}}
+    dec = TU.decide(tuner, N, default=st.get("champion") or lead)
+    champ = dec["champion"]
+    T, TDATE = N + 1, pd.Timestamp(last["date"]) + pd.Timedelta(days=7)
+    nxt = None
+    if champ.startswith("공식:"):
+        S = FO.score_all(df, [champ[3:]])[champ[3:]]
+        picks = LE.pick_array(S, K)
+        del S
+        new_lead = rep["chosen"]
+    else:
+        cfg = next(c for c in tuner["configs"] if c["id"] == champ)
+        nxt = LE.build_model(df, cfg["params"])
+        picks = LE.pick(nxt, K)
+        new_lead = champ
 
     L = [f"로또 {N}회 결과 {ymd(last['date'])}",
          f"당첨번호 {' '.join(f'{n:02d}' for n in nums)} + 보너스 {bonus:02d}",
@@ -226,12 +248,15 @@ def process(h, st):
           f"- 엔진 순위 {a['total']:,}개 중 {a['rank']:,}위, 상위 {a['pct']:.1f}%",
           f"- 인기회피 상위 {a['pop_top']:.0f}% · 최근 50회 구성 필터 {'통과' if a['in_profile'] else '밖'}",
           *TU.report_lines("lotto", rep),
-          "", f"로또 {nxt['T']}회 패턴 상위 10개 {ymd(nxt['TDATE'])} 추첨"]
+          *TU.champion_lines(dec, this_all),
+          "", f"로또 {T}회 패턴 상위 10개 {ymd(TDATE)} 추첨 · 챔피언 {champ}"]
     for c in picks:
-        L.append(f"{c['rank']:>2}. {' '.join(f'{n:02d}' for n in c['numbers'])}  점수 {c['score']:.3f} · 규칙 {c['hits']}/{c['rules']}")
-    st_new = dict(last_round=N, target=nxt["T"], target_date=ymd(nxt["TDATE"]), candidates=picks,
-                  config_id=rep["chosen"], tuner=tuner,
-                  rules=[{k: s[k] for k in ("id", "rule", "basis", "r250", "r50", "w")} for s in nxt["selected"]])
+        tail = f" · 규칙 {c['hits']}/{c['rules']}" if "hits" in c else ""
+        L.append(f"{c['rank']:>2}. {' '.join(f'{n:02d}' for n in c['numbers'])}  점수 {c['score']:.3f}{tail}")
+    st_new = dict(last_round=N, target=T, target_date=ymd(TDATE), candidates=picks,
+                  config_id=new_lead, champion=champ, tuner=tuner,
+                  rules=([{k: s[k] for k in ("id", "rule", "basis", "r250", "r50", "w")} for s in nxt["selected"]]
+                         if nxt else []))
     return "\n".join(L), st_new, N
 
 
