@@ -133,6 +133,26 @@ class LearnTest(unittest.TestCase):
         self.assertEqual(eng.Setting.from_text(m.to_text()), m)
 
 
+class FormulaTest(unittest.TestCase):
+    def test_formulas_ignore_future_rows(self):
+        try:
+            from . import formulas as fm
+        except ImportError:
+            import formulas as fm
+        draws = eng.load_draws(eng.DATA_CSV)
+        ix = len(draws.rounds) - 5
+        cut = draws.truncated(ix)
+        ids = eng.rank_sample(draws, ix)[:5_000]
+        d, g = eng.split_ids(ids)
+        for f in fm.FORMULAS:
+            np.testing.assert_allclose(f.fit(draws, ix)(d, g), f.fit(cut, ix)(d, g), err_msg=f.key)
+
+    def test_ten_picks_cover_every_last_digit(self):
+        scores = np.random.default_rng(11).normal(size=eng.N_CANDIDATES)
+        picks = eng.select(scores, 10)
+        self.assertEqual(sorted(p % 10 for p in picks), list(range(10)))   # 7등 이상 하나는 반드시
+
+
 class SelectTest(unittest.TestCase):
     def test_constraints_on_random_scores(self):
         scores = np.random.default_rng(7).normal(size=eng.N_CANDIDATES)

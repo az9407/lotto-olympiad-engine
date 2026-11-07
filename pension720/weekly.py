@@ -145,33 +145,54 @@ def prizes(group, number, draw_group, draw_number, bonus):
 
 
 def read_method(folder):
-    """그 회차 후보를 만들 때 쓴 방법. 방법.txt가 없으면 결과.md의 설정 이름으로 찾는다."""
-    if (folder / '방법.txt').exists():
-        return eng.Setting.from_text((folder / '방법.txt').read_text(encoding='utf-8'))
+    """그 회차 후보를 만들 때 쓴 (공식 key, 엔진 설정). 없으면 (None, None)."""
+    path = folder / '방법.txt'
+    if path.exists():
+        text = path.read_text(encoding='utf-8')
+        formula = next((line.split('=', 1)[1].strip() for line in text.splitlines()
+                        if line.startswith('formula=')), 'engine')
+        return formula, eng.Setting.from_text(text)
     report = folder / '결과.md'
     if report.exists():
         labels = {m.label(): m for m in eng.SETTINGS}
         for line in report.read_text(encoding='utf-8').splitlines():
-            if line.startswith('선택 설정: '):
-                return labels.get(line.removeprefix('선택 설정: ').strip())
-    return None
+            if line.startswith('선택 설정: ') and line.removeprefix('선택 설정: ').strip() in labels:
+                return 'engine', labels[line.removeprefix('선택 설정: ').strip()]
+    return None, None
+
+
+def write_method(folder, formula, setting):
+    (folder / '방법.txt').write_text(f'formula={formula}\n' + setting.to_text(), encoding='utf-8')
+
+
+PICK_COLUMNS = ('순위', '조', '6자리', '종합점수 S', '특징 요약')
+
+
+def write_picks(path, ids, scores):
+    with path.open('w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(PICK_COLUMNS)
+        for rank, cid in enumerate(ids, 1):
+            writer.writerow((rank, cid // eng.N_NUMBERS + 1, f'{cid % eng.N_NUMBERS:06d}', f'{scores[cid]:.8f}',
+                             eng.summary(cid % eng.N_NUMBERS)))
 
 
 def read_candidates(folder, count=SEND_COUNT):
-    path = folder / '후보15.csv'
+    """텔레그램으로 보낸 10개. 후보10.csv가 없던 회차는 후보15.csv 앞 10개."""
+    path = folder / '후보10.csv'
+    if not path.exists():
+        path = folder / '후보15.csv'
     if not path.exists():
         return []
     with path.open(encoding='utf-8-sig', newline='') as f:
         return [(int(r['순위']), int(r['조']), r['6자리'], r['종합점수 S']) for r in csv.DictReader(f)][:count]
 
 
-def analyze(draws, setting, previous, prepared):
-    """마지막 회차를, 그 회차 직전 자료로 학습한 모델(지난주 모델)로 본다."""
+def analyze(draws, formula, setting, previous, prepared):
+    """마지막 회차를, 그 회차 직전 자료로 학습한 지난주 공식과 엔진으로 본다."""
     i = len(draws.rounds) - 1
-    context = eng.Context(draws, i)
-    catalogs, histories, space = prepared
-    models = [eng.RuleFold(cat, hist, context, space).fit(setting) for cat, hist in zip(catalogs, histories)]
-    scores, parts = eng.score_all(draws, setting, models, index=i)
+    engine_scores, parts, models, context = learn.engine_full(draws, i, setting, prepared)
+    scores = learn.champion_full(draws, i, formula, setting, prepared, engine_scores)
     group = int(draws.groups[i])
     main = ''.join(map(str, draws.main[i]))
     bonus = ''.join(map(str, draws.bonus[i]))
@@ -185,7 +206,7 @@ def analyze(draws, setting, previous, prepared):
 
     return {
         'round': int(draws.rounds[i]), 'date': draws.dates[i].isoformat(),
-        'group': group, 'main': main, 'bonus': bonus, 'setting': setting,
+        'group': group, 'main': main, 'bonus': bonus, 'setting': setting, 'formula': formula,
         'rank': 1 + int(np.count_nonzero(scores > scores[actual])),
         'bonus_rank': 1 + int(np.count_nonzero(bonus_scores > bonus_scores[int(bonus)])),
         'main_rules': rule_table(models[0], actual),
@@ -201,8 +222,8 @@ def analysis_lines(a, top=3):
     main_miss = sorted((r for r in a['main_rules'] if not r[2]), key=lambda r: -r[1])
     bonus_hit = sum(r[2] for r in a['bonus_rules'])
     lines = [
-        f"· 지난주 모델 점수 순위: 500만 중 {a['rank']:,}위, 상위 {100 * a['rank'] / eng.N_CANDIDATES:.1f}%",
-        f"· 1등 규칙 {len(a['main_rules'])}개 중 {len(main_hit)}개 충족",
+        f"· 지난주 공식 점수 순위: 500만 중 {a['rank']:,}위, 상위 {100 * a['rank'] / eng.N_CANDIDATES:.1f}%",
+        f"· 엔진 1등 규칙 {len(a['main_rules'])}개 중 {len(main_hit)}개 충족",
         *(f'  맞음 {f}' for f, _, _ in main_hit[:top]),
         *(f'  빗나감 {f}' for f, _, _ in main_miss[:top]),
         f"· 보너스 번호: 보너스 규칙 {len(a['bonus_rules'])}개 중 {bonus_hit}개 충족, "
@@ -230,14 +251,14 @@ def write_analysis(folder, a):
         return f'| 충족 | 가중치 | 규칙 |\n| --- | ---: | --- |\n{body}'
     text = (f"# 연금복권720+ {a['round']}회 분석 · {a['date']}\n\n"
             f"1등 {a['group']}조 {a['main']} · 보너스 각조 {a['bonus']}\n\n"
-            f"지난주 모델 설정: {a['setting'].label()}\n\n"
+            f"지난주 공식: {learn.formula_label(a['formula'], a['setting'])}\n\n"
             + '\n'.join(analysis_lines(a, top=5)) + '\n\n'
             + '\n'.join(previous_lines(a)) + '\n\n'
             f"## 1등 규칙\n\n{table(a['main_rules'])}\n\n## 보너스 규칙\n\n{table(a['bonus_rules'])}\n")
     (folder / '분석.md').write_text(text, encoding='utf-8')
 
 
-def record(a, method):
+def record(a):
     """지난주 방법이 실제 1등을 몇 위에 놓았는지 실전 성적표에 한 줄 남긴다. (누적 회수, 평균 상위 %)"""
     rows = []
     if SCOREBOARD.exists():
@@ -245,7 +266,7 @@ def record(a, method):
             rows = [r for r in csv.DictReader(f) if int(r['회차']) != a['round']]
     best = next((p for tier in ('1등', '2등', '보너스', '3등', '4등', '5등', '6등', '7등')
                  for _, _, _, prize in a['previous'] for p in prize if p == tier), '낙첨')
-    rows.append({'회차': a['round'], '방법': method.label(), '1등 순위': a['rank'],
+    rows.append({'회차': a['round'], '방법': learn.formula_label(a['formula'], a['setting']), '1등 순위': a['rank'],
                  '500만 중 상위 %': f"{100 * a['rank'] / eng.N_CANDIDATES:.2f}", '후보 10개 최고 등수': best})
     rows.sort(key=lambda r: int(r['회차']))
     with SCOREBOARD.open('w', encoding='utf-8-sig', newline='') as f:
@@ -255,7 +276,7 @@ def record(a, method):
     return len(rows), sum(float(r['500만 중 상위 %']) for r in rows) / len(rows)
 
 
-def compose(a, target, target_date, setting, candidates, learning, live):
+def compose(a, target, target_date, formula, setting, candidates, learning, live):
     lines = [f"연금복권720+ {a['round']}회 결과 · {a['date']}",
              f"1등 {a['group']}조 {a['main']}", f"보너스 각조 {a['bonus']}", '',
              '엔진으로 본 이번 번호', *analysis_lines(a)]
@@ -268,7 +289,7 @@ def compose(a, target, target_date, setting, candidates, learning, live):
             lines.append(f'· 실전 누적 {live[0]}주 평균: 실제 1등이 500만 중 상위 {live[1]:.1f}%')
     lines += ['', f'{target}회 후보 {len(candidates)}개 · {target_date}',
               *(f'{rank}. {g}조 {num}' for rank, g, num, _ in candidates),
-              '', f'설정: {setting.label()}', f'{RESULTS_URL}/round_{target}']
+              '', f'공식: {learn.formula_label(formula, setting)}', f'{RESULTS_URL}/round_{target}']
     return '\n'.join(lines)
 
 
@@ -365,22 +386,31 @@ def main():
         return
 
     previous_dir = RESULTS / f'round_{target - 1}'
-    last_method = read_method(previous_dir)
+    last_formula, last_setting = read_method(previous_dir)
     learned = target_dir / '학습.txt'
     prepared = eng.prepare(draws, learn.LEARN_FOLDS)
-    if new or not (target_dir / '후보15.csv').exists() or not learned.exists():
-        champion = last_method or learn.DEFAULT
-        method, learning, learning_md = learn.learn(draws, champion, prepared)
-        setting, _, context, models, selected, scores, parts = eng.run(draws, method=method, prepared=prepared)
-        eng.save(target_dir, context, setting, None, models, selected, scores, parts, extra=learning_md)
+    if new or not (target_dir / '후보10.csv').exists() or not learned.exists():
+        formula, setting, learning, learning_md = learn.learn(
+            draws, last_formula or 'engine', last_setting or learn.DEFAULT, prepared)
+        n = len(draws.rounds)
+        engine_scores, parts, models, context = learn.engine_full(draws, n, setting, prepared)
+        scores = learn.champion_full(draws, n, formula, setting, prepared, engine_scores)
+        picks15, picks10 = eng.select(scores), eng.select(scores, SEND_COUNT)
+        intro = f'공식: {learn.formula_label(formula)}\n\n' if formula != 'engine' else ''
+        eng.save(target_dir, context, setting, None, models, picks15, scores, parts, extra=intro + learning_md)
+        if formula != 'engine':   # 엔진 점수 열 대신 공식 점수만 남긴다
+            write_picks(target_dir / '후보15.csv', picks15, scores)
+        write_picks(target_dir / '후보10.csv', picks10, scores)
+        write_method(target_dir, formula, setting)
         learned.write_text('\n'.join(learning) + '\n', encoding='utf-8')
-    setting = read_method(target_dir)
+    formula, setting = read_method(target_dir)
     learning = learned.read_text(encoding='utf-8').splitlines()
-    analysis = analyze(draws, last_method or setting, read_candidates(previous_dir), prepared)
+    analysis = analyze(draws, last_formula or formula, last_setting or setting,
+                       read_candidates(previous_dir), prepared)
     write_analysis(previous_dir, analysis)
-    live = record(analysis, last_method) if last_method and (previous_dir / '방법.txt').exists() else None
+    live = record(analysis) if (previous_dir / '방법.txt').exists() else None
     target_date = (draws.dates[-1] + timedelta(days=7)).isoformat()
-    message = compose(analysis, target, target_date, setting, read_candidates(target_dir), learning, live)
+    message = compose(analysis, target, target_date, formula, setting, read_candidates(target_dir), learning, live)
     print(message)
     if args.no_send:
         return

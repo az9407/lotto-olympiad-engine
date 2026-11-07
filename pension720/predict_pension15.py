@@ -775,8 +775,9 @@ class Setting:
     @classmethod
     def from_text(cls, text):
         import ast
+        fields = cls.__dataclass_fields__
         values = dict(line.split('=', 1) for line in text.strip().splitlines() if '=' in line)
-        return cls(**{k: ast.literal_eval(v) for k, v in values.items()})
+        return cls(**{k: ast.literal_eval(v) for k, v in values.items() if k in fields})
 
 
 SETTINGS = tuple(Setting(*args) for args in itertools.product(
@@ -1047,7 +1048,7 @@ def _skip_shown_tie(order, scores, start, value):
     return lo
 
 
-def _next_pick(order, scores, start, chosen):
+def _next_pick(order, scores, start, chosen, picks=PICKS):
     """점수순으로 다음 조건 충족 후보의 위치.
 
     조건: 같은 자리 숫자 일치 3개 이하, 앞 5자리 자리별 같은 숫자 4회 이하,
@@ -1056,7 +1057,7 @@ def _next_pick(order, scores, start, chosen):
     """
     if chosen:
         start = _skip_shown_tie(order, scores, start, shown(scores[chosen[-1]]))
-    slots = PICKS - len(chosen)
+    slots = picks - len(chosen)
     old_groups, old_numbers = np.divmod(np.asarray(chosen, dtype=np.int32), N_NUMBERS)
     old_digits = (old_numbers[:, None] // POWERS % 10).astype(np.int8)
     place_counts = np.array([np.bincount(col, minlength=10) for col in old_digits.T]).reshape(6, 10)
@@ -1081,15 +1082,19 @@ def _next_pick(order, scores, start, chosen):
     return None
 
 
-def select(scores):
-    """점수 내림차순으로 조건을 만족하는 다음 후보를 15개까지. 막히면 직전 선택을 한 칸씩 물린다."""
+def select(scores, picks=PICKS):
+    """점수 내림차순으로 조건을 만족하는 다음 후보를 picks개까지. 막히면 직전 선택을 한 칸씩 물린다.
+
+    10개 이상이면 끝자리 0~9가 모두 들어가므로 7등 이상 하나는 반드시 맞고,
+    끝 2·3자리도 모두 달라 6등·5등에 걸릴 확률도 그 개수에서 가장 높다.
+    """
     order = np.argsort(-scores, kind='stable').astype(np.int32)
     chosen, ranks, start, backtracks = [], [], 0, 0
-    while len(chosen) < PICKS:
-        rank = _next_pick(order, scores, start, chosen)
+    while len(chosen) < picks:
+        rank = _next_pick(order, scores, start, chosen, picks)
         if rank is None:
             if not ranks or backtracks == 256:
-                raise RuntimeError('조건을 모두 만족하는 15개를 찾지 못했습니다.')
+                raise RuntimeError(f'조건을 모두 만족하는 {picks}개를 찾지 못했습니다.')
             chosen.pop()
             start = ranks.pop() + 1
             backtracks += 1
@@ -1103,15 +1108,16 @@ def select(scores):
 
 def check_selection(ids, scores):
     """선정 조건을 결과만 보고 다시 확인한다."""
+    picks = len(ids)
     groups = [i // N_NUMBERS + 1 for i in ids]
     numbers = [f'{i % N_NUMBERS:06d}' for i in ids]
     tails = [n[-1] for n in numbers]
     values = [float(scores[i]) for i in ids]
     problems = {
-        '후보 15개 중복': len(set(ids)) != PICKS,
+        '후보 중복': len(set(ids)) != picks,
         '점수 내림차순': any(a <= b for a, b in zip(values, values[1:])),
-        '표시 점수 동점': len({shown(v) for v in values}) != PICKS,
-        '끝 2자리 중복': len({n[-2:] for n in numbers}) != PICKS,
+        '표시 점수 동점': len({shown(v) for v in values}) != picks,
+        '끝 2자리 중복': len({n[-2:] for n in numbers}) != picks,
         '앞 5자리 같은 숫자 5회 이상': any(max(Counter(n[j] for n in numbers).values()) > 4 for j in range(5)),
         '같은 자리 일치 4개 이상': any(sum(x == y for x, y in zip(a, b)) > 3 for a, b in combinations(numbers, 2)),
         '끝자리 0~9 전부·최대 2회': len(set(tails)) != 10 or max(Counter(tails).values()) > 2,
@@ -1119,7 +1125,7 @@ def check_selection(ids, scores):
     }
     seen_tails, seen_groups = set(), set()
     for i, (tail, group) in enumerate(zip(tails, groups)):
-        left = PICKS - i
+        left = picks - i
         problems['빠진 끝자리 우선'] = problems.get('빠진 끝자리 우선') or (
             left == 10 - len(seen_tails) and tail in seen_tails)
         problems['빠진 조 우선'] = problems.get('빠진 조 우선') or (
