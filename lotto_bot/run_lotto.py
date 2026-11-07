@@ -184,6 +184,17 @@ def lotto_rank(c, nums, bonus):
     return m, LOTTO_RANK.get(m, "")
 
 
+def search_lines(N):
+    import search as SE
+    pool = SE.load_pool()
+    if not pool["defs"]:
+        return []
+    week = [r for r in pool.get("runs", []) if r["round"] >= N - 1]
+    L = [f"- 자동 탐색: 지금까지 {pool['tested']:,}개 시험, 후보 풀 {len(pool['defs'])}개, 이번 주 {sum(r['tested'] for r in week):,}개 시험"]
+    L.append("  새 공식은 발견 다음 회차부터 10회 이상 쌓여야 교체 경쟁에 들어감")
+    return L
+
+
 def process(h, st):
     df = lotto_df(h)
     last = df.iloc[-1]
@@ -217,10 +228,11 @@ def process(h, st):
         res.update(CH.pct_for_round(df, r))
         return res
 
-    this_f = TU.formula_step(tuner, N, FO.ALL + CH.names(), eval_formulas)
+    starts = CH.pool_start()
+    this_f = TU.formula_step(tuner, N, FO.ALL + CH.names(), eval_formulas, no_backfill=set(starts))
     this_all = {**{c["id"]: c["hist"].get(str(N)) for c in tuner["configs"]},
                 **{(n if ":" in n else f"공식:{n}"): v for n, v in this_f.items()}}
-    dec = TU.decide(tuner, N, default=st.get("champion") or lead)
+    dec = TU.decide(tuner, N, default=st.get("champion") or lead, start_after=starts)
     champ = dec["champion"]
     T, TDATE = N + 1, pd.Timestamp(last["date"]) + pd.Timedelta(days=7)
     nxt = None
@@ -257,6 +269,7 @@ def process(h, st):
           f"- 인기회피 상위 {a['pop_top']:.0f}% · 최근 50회 구성 필터 {'통과' if a['in_profile'] else '밖'}",
           *TU.report_lines("lotto", rep),
           *TU.champion_lines(dec, this_all),
+          *search_lines(N),
           "", f"로또 {T}회 패턴 상위 10개 {ymd(TDATE)} 추첨 · 챔피언 {champ}"]
     for c in picks:
         tail = f" · 규칙 {c['hits']}/{c['rules']}" if "hits" in c else ""

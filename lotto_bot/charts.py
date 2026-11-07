@@ -27,7 +27,14 @@ def names():
         for b in EX.SWITCH_BASES:
             out.append(f"매크로전환:{m}높으면{b}추세")
     out += list(EX.ml_models())
-    return out
+    import search as SE
+    return out + SE.pool_names()
+
+
+def pool_start():
+    """자동 탐색으로 찾은 공식은 발견한 회차 이후 성적만 교체 판단에 씀"""
+    import search as SE
+    return {e["name"]: e["round"] for e in SE.load_pool()["defs"]}
 
 
 def scores_next(df, with_ml=True):
@@ -58,6 +65,8 @@ def scores_next(df, with_ml=True):
             s = np.zeros(46)
             s[1:] = np.log(np.clip(mdl.predict_proba(Fte)[:, 1], 1e-6, 1))
             out[name] = s
+    import search as SE
+    out.update(SE.pool_scores_next(df))
     return out
 
 

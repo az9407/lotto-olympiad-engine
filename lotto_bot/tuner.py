@@ -166,17 +166,17 @@ Z = 2.0                # 그 차이가 표준오차의 2배를 넘을 때만 교
 FORMULA_BACKFILL = 12
 
 
-def formula_step(tuner, N, names, eval_round):
-    """eval_round(r) -> {공식이름: pct}. 새 공식은 최근 12회를 채점해서 넣음"""
+def formula_step(tuner, N, names, eval_round, no_backfill=()):
+    """eval_round(r) -> {공식이름: pct}. 새 공식은 최근 12회를 채점해서 넣음, no_backfill은 앞으로만"""
     F = tuner.setdefault("formulas", {})
     for n in names:
         F.setdefault(n, {})
     todo = {N}
     for n in names:
-        if len(F[n]) == 0:
+        if len(F[n]) == 0 and n not in no_backfill:
             todo.update(range(N - FORMULA_BACKFILL + 1, N + 1))
     for r in sorted(todo):
-        if all(str(r) in F[n] for n in names):
+        if all(str(r) in F[n] for n in names if not (n in no_backfill and r < N)):
             continue
         res = eval_round(r)
         for n in names:
@@ -202,8 +202,12 @@ def recent_mean(h, N):
     return (float(np.mean(v)), len(v)) if v else (None, 0)
 
 
-def decide(tuner, N, default):
+def decide(tuner, N, default, start_after=None):
+    """start_after: 이름 → 회차. 그 회차 이후 기록만 비교에 씀"""
     M = all_methods(tuner)
+    for mid, r0 in (start_after or {}).items():
+        if mid in M:
+            M[mid] = {r: v for r, v in M[mid].items() if int(r) > r0}
     champ = tuner.get("champion") or default
     if champ not in M:
         champ = default if default in M else "A"

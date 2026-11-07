@@ -23,7 +23,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: lotto-weekly
+  group: lotto-state
   cancel-in-progress: false
 
 jobs:
