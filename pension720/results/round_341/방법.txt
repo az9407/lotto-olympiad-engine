@@ -1,3 +1,4 @@
+formula=engine
 time_weights=(2.0, 1.5, 1.0)
 threshold=0.55
 shrink=20
