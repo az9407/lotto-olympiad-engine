@@ -190,6 +190,12 @@ def formula_step(tuner, N, names, eval_round, no_backfill=()):
     return {n: F[n].get(str(N)) for n in names}
 
 
+def bonferroni_z(m, alpha=0.05):
+    """도전자 m개를 동시에 겨룰 때 우연 교체를 막는 기준, 연금복권 쪽과 같은 방식"""
+    from statistics import NormalDist
+    return max(Z, NormalDist().inv_cdf(1 - alpha / max(m, 1)))
+
+
 def all_methods(tuner):
     d = {c["id"]: c["hist"] for c in tuner["configs"]}
     for n, h in tuner.get("formulas", {}).items():
@@ -212,6 +218,7 @@ def decide(tuner, N, default, start_after=None):
     if champ not in M:
         champ = default if default in M else "A"
     best = None
+    zcrit = bonferroni_z(len(M) - 1)
     for mid, h in M.items():
         if mid == champ:
             continue
@@ -221,7 +228,7 @@ def decide(tuner, N, default, start_after=None):
         d = np.array([h[r] - M[champ][r] for r in rs])
         m = float(d.mean())
         se = float(d.std(ddof=1) / np.sqrt(len(d)))
-        if m <= -MIN_GAIN and (se == 0 or m / se <= -Z):
+        if m <= -MIN_GAIN and (se == 0 or m / se <= -zcrit):
             if best is None or m < best[1]:
                 best = (mid, m, se, len(d))
     old = champ
@@ -248,7 +255,8 @@ def champion_lines(dec, this_round):
     else:
         L.append(f"- 챔피언 유지 {dec['champion']}, 최근 {dec['champ_n']}회 평균 상위 {dec['champ_mean']:.1f}%"
                  if dec["champ_mean"] is not None else f"- 챔피언 유지 {dec['champion']}")
-    L.append(f"- 교체 기준: 같은 회차끼리 비교해 {MIN_GAIN:g}%p 이상 앞서고 표준오차의 {Z:g}배를 넘을 때만")
+    L.append(f"- 교체 기준: 같은 회차끼리 비교해 {MIN_GAIN:g}%p 이상 앞서고 표준오차의 {bonferroni_z(dec['n_methods'] - 1):.1f}배를 넘을 때만,"
+             f" 후보가 많을수록 우연 교체를 막으려 기준을 높임")
     return L
 
 
