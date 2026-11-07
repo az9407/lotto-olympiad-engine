@@ -444,6 +444,13 @@ def main():
     if new or not (target_dir / '후보10.csv').exists() or not learned.exists():
         macro_errors = learn.lab.update_macro()
         notes += [f'매크로 지표 받기 실패: {e}' for e in macro_errors] or ['매크로 지표 최신 값으로 갱신']
+        external = learn._extra_module('lab_external')
+        if external is not None:
+            try:
+                ext_errors = external.update_external()
+            except Exception as e:   # 외부 자료가 안 받아져도 지난 값으로 계속
+                ext_errors = [f'{type(e).__name__} {e}']
+            notes += [f'외부 지표 받기 실패: {e}' for e in ext_errors] or ['외부 지표·로또 번호 최신 값으로 갱신']
         formula, setting, learning, learning_md, table = learn.learn(
             draws, last_formula or 'engine', last_setting or learn.DEFAULT, prepared)
         n = len(draws.rounds)
