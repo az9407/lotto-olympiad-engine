@@ -147,6 +147,21 @@ class FormulaTest(unittest.TestCase):
         for f in fm.FORMULAS:
             np.testing.assert_allclose(f.fit(draws, ix)(d, g), f.fit(cut, ix)(d, g), err_msg=f.key)
 
+    def test_creative_formulas_ignore_future_rows(self):
+        try:
+            from . import lab
+        except ImportError:
+            import lab
+        draws = eng.load_draws(eng.DATA_CSV)
+        macro = lab.load_macro()
+        ix = len(draws.rounds) - 7
+        cut = draws.truncated(ix)
+        ids = lab.fold_sample(draws, ix)[:3_000]
+        d, g = eng.split_ids(ids)
+        full = {f.key: f for f in lab.creative_formulas(draws, macro)}
+        for f in lab.creative_formulas(cut, macro):
+            np.testing.assert_allclose(full[f.key].fit(draws, ix)(d, g), f.fit(cut, ix)(d, g), err_msg=f.key)
+
     def test_ten_picks_cover_every_last_digit(self):
         scores = np.random.default_rng(11).normal(size=eng.N_CANDIDATES)
         picks = eng.select(scores, 10)

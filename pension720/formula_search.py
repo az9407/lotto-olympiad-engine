@@ -46,8 +46,15 @@ def engine_joint(fold_pair, setting, draws, ix, ids):
         d, g, eng.frequency_logs(draws, ix, setting.time_weights))
 
 
-def walk(draws, keys, folds, setting=None, prepared=None, log_progress=True):
-    """반환: (이름 목록, (공식 수, folds) 순위 배열). setting이 있으면 'engine'과 앙상블도 포함."""
+LABELS = {}
+
+
+def walk(draws, formulas, folds, setting=None, prepared=None, log_progress=True):
+    """반환: (이름 목록, (공식 수, folds) 순위 배열). formulas는 Formula 목록이나 formulas.py key 목록.
+    setting이 있으면 'engine'과 앙상블도 포함."""
+    formulas = [fm.BY_KEY[f] if isinstance(f, str) else f for f in formulas]
+    LABELS.update({f.key: f.label for f in formulas})
+    keys = [f.key for f in formulas]
     n = len(draws.rounds)
     use_engine = setting is not None
     names = list(keys) + (['engine'] + list(ENSEMBLES) if use_engine else [])
@@ -58,10 +65,10 @@ def walk(draws, keys, folds, setting=None, prepared=None, log_progress=True):
         ids = eng.rank_sample(draws, ix)
         d, g = eng.split_ids(ids)
         z = {}
-        for k, key in enumerate(keys):
-            s = fm.BY_KEY[key].fit(draws, ix)(d, g)
+        for k, formula in enumerate(formulas):
+            s = np.nan_to_num(np.asarray(formula.fit(draws, ix)(d, g), dtype=float), nan=-1e9)
             ranks[k, f] = _rank_last(s)
-            z[key] = fm.zscore(s)
+            z[formula.key] = fm.zscore(s)
         if use_engine:
             context = eng.Context(draws, ix)
             pair = [eng.RuleFold(c, h, context, space) for c, h in zip(catalogs, histories)]
@@ -80,7 +87,7 @@ def label(name):
         return '규칙 엔진'
     if name in ENSEMBLES:
         return '앙상블 ' + ENSEMBLES[name][0]
-    return fm.BY_KEY[name].label
+    return LABELS.get(name) or fm.BY_KEY[name].label
 
 
 def share(rank):

@@ -1,9 +1,11 @@
 """연금복권720+ 주간 학습.
 
 1단계 엔진 다듬기: 지금 엔진 설정과, 값을 하나나 둘 바꾼 설정 23개를 최근 60회로 겨룬다.
-2단계 공식 고르기: 다듬은 엔진, formulas.py의 다른 공식 27개, 앙상블 6개를 같은 60회로 겨룬다.
+2단계 공식 고르기: 다듬은 엔진, formulas.py·lab.py의 다른 공식 약 530개(차트 기법, 매크로·달력 국면,
+시계열, 부스팅 포함), 앙상블 6개를 같은 60회로 겨룬다.
 각 회차는 그 회차 이전 자료로만 학습해 같은 무작위 20만 후보 안에서 실제 1등의 순위를 잰다.
-지금 쓰는 것보다 회차별 짝 비교에서 평균 순위가 2,000 이상 낮고 그 차이가 표준오차의 3배를 넘을 때만 바꾼다.
+지금 쓰는 것보다 회차별 짝 비교에서 평균 순위가 2,000 이상 낮고 그 차이가 표준오차의 Z배를 넘을 때만 바꾼다.
+Z는 도전자 수만큼 여러 번 시험하는 것을 감안해 우연히 통과할 확률이 5%가 되도록 정한다 (23개면 약 3.1, 560개면 약 3.9).
 우연히 좋아 보이는 쪽으로 매주 흔들리지 않게 하려는 기준이다.
 """
 from __future__ import annotations
@@ -11,16 +13,19 @@ from __future__ import annotations
 import random
 from dataclasses import replace
 from math import sqrt
+from statistics import NormalDist
 
 import numpy as np
 
 try:
     from . import formula_search as fs
     from . import formulas as fm
+    from . import lab
     from . import predict_pension15 as eng
 except ImportError:
     import formula_search as fs
     import formulas as fm
+    import lab
     import predict_pension15 as eng
 
 LEARN_FOLDS = 60
@@ -34,10 +39,17 @@ OPTIONS = {
     'mix': [(1.0, 0.0), (0.9, 0.1), (0.8, 0.2), (0.7, 0.3), (0.6, 0.4)],
 }
 RANDOM_PAIRS = 4
-Z = 3.0
 MIN_GAIN = 0.01 * eng.RANK_SAMPLE
 DEFAULT = eng.Setting((2.0, 1.5, 1.0), 0.55, 20, 40)
-FORMULA_KEYS = [f.key for f in fm.FORMULAS if f.key != 'random']
+
+
+def pool(draws):
+    """2단계에서 겨루는 공식들 (무작위 기준 제외)."""
+    return [f for f in lab.creative_formulas(draws, lab.load_macro()) if f.key != 'random']
+
+
+def threshold(challengers_count):
+    return max(3.0, NormalDist().inv_cdf(1 - 0.05 / max(1, challengers_count)))
 
 
 def challengers(champion, seed):
@@ -65,11 +77,12 @@ def decide(methods, ranks):
     """0번(지금 것)과 회차별로 짝지은 순위 차이로 판정. (고른 것, 표 행들 좋은 순)"""
     base = ranks[0]
     rows, best = [], None
+    z = threshold(len(methods) - 1)
     for k in range(1, len(methods)):
         diff = ranks[k] - base
         mean = float(diff.mean())
         se = float(diff.std(ddof=1)) / sqrt(len(diff)) if len(diff) > 1 else 0.0
-        passed = se > 0 and mean < -Z * se and -mean >= MIN_GAIN
+        passed = se > 0 and mean < -z * se and -mean >= MIN_GAIN
         rows.append((methods[k], float(ranks[k].mean()), mean, se, passed))
         if passed and (best is None or mean < best[2]):
             best = rows[-1]
@@ -108,12 +121,13 @@ def champion_full(draws, ix, key, setting, prepared, engine_scores=None):
     if key == 'engine':
         return engine_scores if engine_scores is not None else engine_full(draws, ix, setting, prepared)[0]
     members = fs.ENSEMBLES[key][1] if key in fs.ENSEMBLES else (key,)
+    registry = {f.key: f for f in lab.creative_formulas(draws, lab.load_macro())}
     parts = []
     for m in members:
         if m == 'engine':
             s = engine_scores if engine_scores is not None else engine_full(draws, ix, setting, prepared)[0]
         else:
-            s = fm.full_scores(fm.BY_KEY[m], draws, ix)
+            s = np.nan_to_num(fm.full_scores(registry[m], draws, ix), nan=-1e9)
         parts.append(fm.zscore(s))
     return np.mean(parts, axis=0) + tie_all(draws, ix, setting.time_weights)
 
@@ -127,7 +141,7 @@ def learn(draws, formula, setting, prepared, log_progress=True):
     ranks = eng.evaluate(draws, catalogs, histories, space, methods, LEARN_FOLDS, log_progress)
     new_setting, rows = decide(methods, ranks)
 
-    names, franks = fs.walk(draws, FORMULA_KEYS, LEARN_FOLDS, new_setting, prepared, log_progress)
+    names, franks = fs.walk(draws, pool(draws), LEARN_FOLDS, new_setting, prepared, log_progress)
     if formula not in names:
         formula = 'engine'
     order = [formula] + [n for n in names if n != formula]
@@ -145,12 +159,12 @@ def learn(draws, formula, setting, prepared, log_progress=True):
     engine_table = '\n'.join(f"| {m.label()} | {_share(r):.1f}% | {d:+,.0f} | {se:,.0f} | {'교체 기준 통과' if ok else ''} |"
                              for m, r, d, se, ok in rows)
     formula_table = '\n'.join(f"| {formula_label(k)} | {_share(r):.1f}% | {d:+,.0f} | {se:,.0f} | {'교체 기준 통과' if ok else ''} |"
-                              for k, r, d, se, ok in frows)
+                              for k, r, d, se, ok in frows[:30])
     md = (f'## 주간 학습\n\n'
           f'지금 공식: {formula_label(formula, setting)} · 최근 {LEARN_FOLDS}회 평균 상위 {_share(current):.1f}%\n\n'
           f'다음 주 공식: {formula_label(new_formula, new_setting)}\n\n'
           f'평균 상위 %는 각 회차를 그 이전 자료로만 학습했을 때 무작위 20만 후보 안 실제 1등의 위치입니다. 무작위면 50%입니다. '
           f'차이는 지금 것과의 회차별 순위 차이 평균이며, 평균 2,000 이상 낮고 표준오차 3배를 넘어야 교체합니다.\n\n'
           f'### 엔진 설정\n\n| 설정 | 평균 상위 | 순위 차이 | 표준오차 | 판정 |\n| --- | ---: | ---: | ---: | --- |\n{engine_table}\n\n'
-          f'### 다른 공식과 앙상블\n\n| 공식 | 평균 상위 | 순위 차이 | 표준오차 | 판정 |\n| --- | ---: | ---: | ---: | --- |\n{formula_table}\n')
+          f'### 다른 공식과 앙상블 {len(frows)}개 중 상위 30개 · 교체 기준 Z {threshold(len(frows)):.2f}\n\n| 공식 | 평균 상위 | 순위 차이 | 표준오차 | 판정 |\n| --- | ---: | ---: | ---: | --- |\n{formula_table}\n')
     return new_formula, new_setting, lines, md

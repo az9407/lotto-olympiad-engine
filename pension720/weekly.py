@@ -390,6 +390,8 @@ def main():
     learned = target_dir / '학습.txt'
     prepared = eng.prepare(draws, learn.LEARN_FOLDS)
     if new or not (target_dir / '후보10.csv').exists() or not learned.exists():
+        for error in learn.lab.update_macro():
+            print('매크로 자료 받기 실패', error, file=sys.stderr)
         formula, setting, learning, learning_md = learn.learn(
             draws, last_formula or 'engine', last_setting or learn.DEFAULT, prepared)
         n = len(draws.rounds)

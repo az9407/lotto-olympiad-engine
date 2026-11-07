@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - run: python -m pip install --quiet "numpy>=2.0" openpyxl
+      - run: python -m pip install --quiet "numpy>=2.0" openpyxl scikit-learn
       - name: 새 회차 추가·분석·후보 계산·텔레그램 발송
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
