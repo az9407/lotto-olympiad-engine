@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from math import sqrt
 from pathlib import Path
 
@@ -49,37 +50,41 @@ def engine_joint(fold_pair, setting, draws, ix, ids):
 LABELS = {}
 
 
+def _walk_fold(ix, draws, formulas, setting, catalogs, histories, space):
+    use_engine = setting is not None
+    ids = eng.rank_sample(draws, ix)
+    d, g = eng.split_ids(ids)
+    z, out = {}, []
+    for formula in formulas:
+        s = np.nan_to_num(np.asarray(formula.fit(draws, ix)(d, g), dtype=float), nan=-1e9)
+        out.append(_rank_last(s))
+        z[formula.key] = fm.zscore(s)
+    if use_engine:
+        context = eng.Context(draws, ix)
+        pair = [eng.RuleFold(c, h, context, space) for c, h in zip(catalogs, histories)]
+        s = engine_joint(pair, setting, draws, ix, ids)
+        out.append(_rank_last(s))
+        z['engine'] = fm.zscore(s)
+        out += [_rank_last(np.mean([z[m] for m in members if m in z], axis=0)) for _, members in ENSEMBLES.values()]
+    return np.array(out)
+
+
 def walk(draws, formulas, folds, setting=None, prepared=None, log_progress=True):
     """반환: (이름 목록, (공식 수, folds) 순위 배열). formulas는 Formula 목록이나 formulas.py key 목록.
     setting이 있으면 'engine'과 앙상블도 포함."""
     formulas = [fm.BY_KEY[f] if isinstance(f, str) else f for f in formulas]
     LABELS.update({f.key: f.label for f in formulas})
-    keys = [f.key for f in formulas]
     n = len(draws.rounds)
-    use_engine = setting is not None
-    names = list(keys) + (['engine'] + list(ENSEMBLES) if use_engine else [])
-    ranks = np.zeros((len(names), folds))
-    if use_engine:
+    names = [f.key for f in formulas] + (['engine'] + list(ENSEMBLES) if setting is not None else [])
+    catalogs = histories = space = None
+    if setting is not None:
         catalogs, histories, space = prepared or eng.prepare(draws, folds)
-    for f, ix in enumerate(range(n - folds, n)):
-        ids = eng.rank_sample(draws, ix)
-        d, g = eng.split_ids(ids)
-        z = {}
-        for k, formula in enumerate(formulas):
-            s = np.nan_to_num(np.asarray(formula.fit(draws, ix)(d, g), dtype=float), nan=-1e9)
-            ranks[k, f] = _rank_last(s)
-            z[formula.key] = fm.zscore(s)
-        if use_engine:
-            context = eng.Context(draws, ix)
-            pair = [eng.RuleFold(c, h, context, space) for c, h in zip(catalogs, histories)]
-            s = engine_joint(pair, setting, draws, ix, ids)
-            ranks[len(keys), f] = _rank_last(s)
-            z['engine'] = fm.zscore(s)
-            for e, (_, members) in enumerate(ENSEMBLES.values()):
-                ranks[len(keys) + 1 + e, f] = _rank_last(np.mean([z[m] for m in members], axis=0))
-        if log_progress and (f + 1) % 10 == 0:
-            print(f'공식 검증 {f + 1}/{folds}회', file=sys.stderr, flush=True)
-    return names, ranks
+    start = time.time()
+    columns = eng.parallel_folds(_walk_fold, list(range(n - folds, n)),
+                                 (draws, formulas, setting, catalogs, histories, space))
+    if log_progress:
+        print(f'공식 검증 {folds}회 · 공식 {len(names)}개 · {time.time() - start:.0f}초', file=sys.stderr, flush=True)
+    return names, np.stack(columns, axis=1)
 
 
 def label(name):

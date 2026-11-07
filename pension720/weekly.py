@@ -397,7 +397,8 @@ def main():
         n = len(draws.rounds)
         engine_scores, parts, models, context = learn.engine_full(draws, n, setting, prepared)
         scores = learn.champion_full(draws, n, formula, setting, prepared, engine_scores)
-        picks15, picks10 = eng.select(scores), eng.select(scores, SEND_COUNT)
+        picks15 = eng.select(scores)
+        picks10 = picks15[:SEND_COUNT]   # 텔레그램은 15개 중 점수 상위 10개 그대로
         intro = f'공식: {learn.formula_label(formula)}\n\n' if formula != 'engine' else ''
         eng.save(target_dir, context, setting, None, models, picks15, scores, parts, extra=intro + learning_md)
         if formula != 'engine':   # 엔진 점수 열 대신 공식 점수만 남긴다

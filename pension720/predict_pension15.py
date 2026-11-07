@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+import os
 import sys
+import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -983,30 +985,55 @@ def rank_sample(draws, index):
     return np.append(sample, np.int32(answer))
 
 
+WORKERS = int(os.environ.get('PENSION_WORKERS', os.cpu_count() or 1))
+_PARALLEL = {}
+
+
+def _parallel_call(ix):
+    return _PARALLEL['fn'](ix, *_PARALLEL['args'])
+
+
+def parallel_folds(fn, indices, args, workers=None):
+    """회차마다 fn(ix, *args)를 돌린다. 리눅스에서는 프로세스를 나눠 동시에 돌리고 결과 순서는 그대로다."""
+    import multiprocessing as mp
+    workers = min(workers or WORKERS, len(indices))
+    if workers <= 1 or 'fork' not in mp.get_all_start_methods():
+        return [fn(ix, *args) for ix in indices]
+    _PARALLEL.update(fn=fn, args=args)
+    chunk = -(-len(indices) // workers)   # 연속 회차를 한 프로세스에 몰아 캐시를 살린다
+    with mp.get_context('fork').Pool(workers) as pool:
+        return pool.map(_parallel_call, indices, chunksize=chunk)
+
+
+def _evaluate_fold(ix, draws, catalogs, histories, space, methods):
+    context = Context(draws, ix)
+    rule_folds = [RuleFold(cat, hist, context, space) for cat, hist in zip(catalogs, histories)]
+    ids = rank_sample(draws, ix)
+    digits, groups = split_ids(ids)
+    ties = {w: tie_term(digits, groups, frequency_logs(draws, ix, w)) for w in {m.time_weights for m in methods}}
+    cache = [{}, {}]
+    out = np.zeros(len(methods))
+    for s, method in enumerate(methods):
+        parts = []
+        for stream, fold in enumerate(rule_folds):
+            model = fold.fit(method)
+            key = tuple((id(r.rule), r.adjusted) for r in model.rules)
+            if key not in cache[stream]:
+                cache[stream][key] = model.score(ids)
+            parts.append(cache[stream][key])
+        joint = method.mix[0] * parts[0] + method.mix[1] * parts[1] + ties[method.time_weights]
+        out[s] = 1 + np.count_nonzero(joint[:-1] > joint[-1]) + 0.5 * np.count_nonzero(joint[:-1] == joint[-1])
+    return out
+
+
 def evaluate(draws, catalogs, histories, space, methods, folds=ROLLING_FOLDS, log_progress=True):
     """최근 folds회 각각을 그 이전 자료로만 학습해, 무작위 20만 후보 안 실제 1등의 순위. (방법 수, folds) 배열."""
     n = len(draws.rounds)
-    ranks = np.zeros((len(methods), folds))
-    for f, ix in enumerate(range(n - folds, n)):
-        context = Context(draws, ix)
-        rule_folds = [RuleFold(cat, hist, context, space) for cat, hist in zip(catalogs, histories)]
-        ids = rank_sample(draws, ix)
-        digits, groups = split_ids(ids)
-        ties = {w: tie_term(digits, groups, frequency_logs(draws, ix, w)) for w in {m.time_weights for m in methods}}
-        cache = [{}, {}]
-        for s, method in enumerate(methods):
-            parts = []
-            for stream, fold in enumerate(rule_folds):
-                model = fold.fit(method)
-                key = tuple((id(r.rule), r.adjusted) for r in model.rules)
-                if key not in cache[stream]:
-                    cache[stream][key] = model.score(ids)
-                parts.append(cache[stream][key])
-            joint = method.mix[0] * parts[0] + method.mix[1] * parts[1] + ties[method.time_weights]
-            ranks[s, f] = 1 + np.count_nonzero(joint[:-1] > joint[-1]) + 0.5 * np.count_nonzero(joint[:-1] == joint[-1])
-        if log_progress and (f + 1) % 10 == 0:
-            print(f'롤링 검증 {f + 1}/{folds}회', file=sys.stderr, flush=True)
-    return ranks
+    start = time.time()
+    columns = parallel_folds(_evaluate_fold, list(range(n - folds, n)), (draws, catalogs, histories, space, methods))
+    if log_progress:
+        print(f'롤링 검증 {folds}회 · 방법 {len(methods)}개 · {time.time() - start:.0f}초', file=sys.stderr, flush=True)
+    return np.stack(columns, axis=1)
 
 
 def tune(draws, catalogs, histories, space, log_progress=True):
