@@ -35,7 +35,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - run: python -m pip install --quiet "numpy>=2.0,<3" "pandas>=2.2" "scikit-learn>=1.4"
+      - run: python -m pip install --quiet "numpy>=2.0,<3" "pandas>=2.2" "scikit-learn>=1.4" "scipy>=1.11" "networkx>=3"
+      - name: 후보 모듈 불러오기 점검
+        run: python -c "import sys; sys.path.insert(0,'lotto_bot'); import charts as CH; print(len(CH.names()), '후보')"
       - name: 새 회차 분석·자동 학습·후보 10개·텔레그램 발송
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
