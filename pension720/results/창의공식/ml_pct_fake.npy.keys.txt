@@ -1,0 +1,75 @@
+ml|bma|pos	베이즈 모형평균 자리별
+ml|bma|shared	베이즈 모형평균 여섯 자리 공통
+ml|hedge|0.3	헤지 학습률0.3
+ml|hedge|3	헤지 학습률3
+ml|fade|0.9	잊는 헤지 0.9
+ml|fade|0.97	잊는 헤지 0.97
+ml|fixshare|0.05	고정 나눔 헤지 0.05
+ml|ftl|all	선두 전문가 따라가기 전체
+ml|ftl|30	선두 전문가 따라가기 최근30회
+ml|em|all	EM 쌓기 전체
+ml|em|60	EM 쌓기 최근60회
+ml|eg|0.05	지수 경사 0.05
+ml|eg|0.5	지수 경사 0.5
+ml|ts|beta	톰슨 표집 베타
+ml|ts|dir	톰슨 표집 디리클레 가중치
+ml|worst|all	반대 학습자 꼴찌 전문가
+ml|regime|직전 조	국면별 메타 학습자 직전 조
+ml|regime|계절	국면별 메타 학습자 계절
+ml|regime|달 위상 4	국면별 메타 학습자 달 위상 4
+ml|regime|회차 mod 2	국면별 메타 학습자 회차 mod 2
+ml|regime|자리합 이평 교차	국면별 메타 학습자 자리합 이평 교차
+ml|regime|usdkrw 4주 방향	국면별 메타 학습자 usdkrw 4주 방향
+ml|loglin|all	로그 선형 풀링 전체
+ml|loglin|100	로그 선형 풀링 최근100회
+ml|bmawin	창 길이 베이즈 모형평균
+ml|bmadecay	감쇠율 베이즈 모형평균
+ml|ebdecay	감쇠율 경험적 베이즈 선택
+ml|conf|hot50	순위 보정 빈도50
+ml|conf|overdue	순위 보정 미출현
+ml|conf|markov1	순위 보정 마르코프
+ml|confnb	순위 보정 나이브 베이즈 5전문가
+ml|confpos|hot20	순위 보정 빈도20 자리별
+ml|ebdir|all	위계 디리클레 경험적 베이즈 전체
+ml|ebdir|100	위계 디리클레 경험적 베이즈 최근100회
+ml|bocpd|20	베이즈 변화점 위험1/20
+ml|bocpd|100	베이즈 변화점 위험1/100
+ml|hmm|2	은닉 마르코프 상태2
+ml|hmm|3	은닉 마르코프 상태3
+ml|ebmarkov	위계 마르코프 경험적 베이즈
+ml|shrink2	2단 수축 최근20→전체→균등
+ml|bridge|lag	베이지안 릿지 숫자 회귀 시차
+ml|bridge|all	베이지안 릿지 숫자 회귀 전체 특징
+ml|gpr|macro	가우스 과정 숫자 회귀 매크로
+ml|pp|softmax|lag|0.05	소프트맥스 자리별 시차 C0.05
+ml|pp|softmax|all|0.05	소프트맥스 자리별 전체 특징 C0.05
+ml|pp|softmax|all|0.5	소프트맥스 자리별 전체 특징 C0.5
+ml|pp|softmax|macro|0.05	소프트맥스 자리별 매크로·달력 C0.05
+ml|pp|softmax|lag|w100	소프트맥스 자리별 시차 최근100회 학습
+ml|pp|rf|all|5	랜덤 포레스트 자리별 전체 잎5
+ml|pp|rf|lag|20	랜덤 포레스트 자리별 시차 잎20
+ml|pp|rf|all|w100	랜덤 포레스트 자리별 전체 최근100회 학습
+ml|pp|et|all|10	엑스트라 트리 자리별 전체 잎10
+ml|pp|knn|lag|20	kNN 자리별 시차 이웃20
+ml|pp|knn|macro|50	kNN 자리별 매크로·달력 이웃50
+ml|pp|gnb|macro	가우스 나이브 베이즈 자리별 매크로·달력
+ml|pp|hgb|all	다중 부스팅 자리별 전체 특징
+ml|pp|mlp|lag	MLP 자리별 시차
+ml|pp|rff|all	무작위 푸리에 특징 소프트맥스 자리별
+ml|pp|cnb|state	범주 나이브 베이즈 자리별 국면87개
+ml|pool|softmax|lag	소프트맥스 여섯 자리 합침 시차
+ml|pool|rf|lag	랜덤 포레스트 여섯 자리 합침 시차
+ml|pool|knn|lag	kNN 여섯 자리 합침 시차 이웃60
+ml|pool|mlp|all	MLP 여섯 자리 합침 전체 특징
+ml|cand|mlp	MLP 실제 대 무작위
+ml|cand|mlp_macro	MLP 실제 대 무작위 매크로 포함
+ml|cand|rff	무작위 푸리에 특징 로지스틱 실제 대 무작위
+ml|cand|pair_logit	쌍대 순위 로지스틱
+ml|cand|pair_svm	쌍대 순위 SVM
+ml|cand|lda	수축 LDA 실제 대 무작위
+ml|cand|gnb	가우스 나이브 베이즈 실제 대 무작위
+ml|cand|et	엑스트라 트리 실제 대 무작위 매크로 포함
+ml|stack|oos	시계열 교차검증 쌓기 분류기3+전문가3
+ml|stack|bma	시계열 교차검증 베이즈 모형평균 분류기3+전문가3
+ml|stack|oos5	시계열 교차검증 쌓기 분류기5 최근100회
+#seconds	729.0
