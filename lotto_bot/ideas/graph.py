@@ -16,7 +16,10 @@
 - 자리:시계열          정렬된 자리 x1~x6 각각 직전 값 근처였던 과거의 다음 값 분포 ÷ 자리 기본 확률
 - 삼중:재출현          과거 회차와 공유하는 삼중 조합 수의 감쇠 합
 
-매개변수 FINAL은 300~999회 성적만으로 골랐습니다.
+매개변수와 방향 FINAL·COMBO_FINAL 은 300~999회 성적만으로 골랐습니다. 방향 -1 은 위 설명의 반대쪽을 위로 둡니다.
+1000~1149회로 고른 후보는 자리:시계열, 1150~1249회 한 번 채점 평균 47.9%, 표준오차 3.0. 11개 모두 C 평균 45.0~52.7%.
+이 파일은 lotto_bot/ideas 안의 다른 파일 이름과 겹치지 않게 경로로 불러 쓰세요.
+  spec = importlib.util.spec_from_file_location("ideas_graph", "lotto_bot/ideas/graph.py")
 """
 from itertools import chain, combinations
 from math import comb
