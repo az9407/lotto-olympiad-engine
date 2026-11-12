@@ -3,11 +3,11 @@ name: 연금복권720 주간 자동 갱신
 # 목요일 19:05 KST 추첨 뒤 여러 번 실행. 이미 보낸 회차면 바로 끝난다.
 on:
   schedule:
-    - cron: '45 10 * * 4'   # 목 19:45 KST
-    - cron: '20 11 * * 4'   # 목 20:20 KST
-    - cron: '20 12 * * 4'   # 목 21:20 KST
-    - cron: '50 13 * * 4'   # 목 22:50 KST
-    - cron: '20 0 * * 5'    # 금 09:20 KST, 그때까지 못 받으면 텔레그램으로 알림
+    # GitHub 예약 실행은 가끔 빠지므로 자주 돌린다. 이미 보낸 회차면 20초 안에 끝난다.
+    - cron: '15,35,55 10-14 * * 4'   # 목 19:15~23:55 KST 20분마다
+    - cron: '25 15-23 * * 4'         # 목 자정~금 08:25 KST 매시
+    - cron: '25 * * * 5'             # 금 09:25~토 08:25 KST 매시, 금요일까지 못 받으면 한 번 알림
+    - cron: '45 */4 * * 0,1,2,3,6'   # 나머지 요일 4시간마다, 빠진 회차 보충
   workflow_dispatch:
   push:
     paths:
@@ -27,6 +27,9 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
+      - name: 최신 기록으로 맞추기
+        # 줄 서 있던 실행은 예전 커밋으로 시작하므로, 앞 실행이 이미 보낸 회차를 다시 보내지 않게 최신으로 맞춘다
+        run: git fetch --quiet origin "${GITHUB_REF_NAME}" && git reset --hard FETCH_HEAD
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'

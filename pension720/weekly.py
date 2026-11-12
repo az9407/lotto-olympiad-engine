@@ -430,8 +430,10 @@ def main():
     target_dir = RESULTS / f'round_{target}'
     if (target_dir / '텔레그램.txt').exists():
         overdue = datetime.now(KST).date() >= last_date + timedelta(days=8)
-        if overdue and not args.no_send:   # 금요일 실행까지 새 회차가 없으면 한 번 알린다
+        alerted = target_dir / '지연알림.txt'
+        if overdue and not args.no_send and not alerted.exists():   # 금요일까지 새 회차가 없으면 한 번만 알린다
             send(f'연금복권720+ {last_round + 1}회 결과를 아직 받지 못했습니다.\n' + '\n'.join(errors))
+            alerted.write_text(datetime.now(KST).isoformat() + '\n', encoding='utf-8')
         print(f'{target}회 후보는 이미 보냈습니다. 새 회차 없음.')
         return
 
